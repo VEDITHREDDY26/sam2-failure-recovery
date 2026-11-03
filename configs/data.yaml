@@ -1,0 +1,12 @@
+kind: data
+data_root: ${SAM2FR_DATA_ROOT}
+davis:
+  root: DAVIS
+  split: val
+  resolution: 480p
+  year: 2017
+sav:
+  root: SA-V
+  val_split: sav_val
+  test_split: sav_test
+output_root: outputs
