@@ -22,8 +22,8 @@ def validate_method(name: str) -> str:
 
 
 def is_oracle_method(name: str) -> bool:
-    """True if 'oracle' is one of the underscore-separated tokens of the method name."""
-    return ORACLE_TOKEN in validate_method(name).split("_")
+    """True if the method name contains 'oracle' anywhere (false positives are harmless)."""
+    return ORACLE_TOKEN in validate_method(name)
 
 
 def validate_split(split: str) -> str:

@@ -51,5 +51,6 @@ def test_oracle_detection() -> None:
     assert layout.is_oracle_method("fix_oracle_tiny")
     assert layout.is_oracle_method("sam2_tiny_oracle")
     assert not layout.is_oracle_method("sam2_tiny")
-    assert not layout.is_oracle_method("oracles")
-    assert not layout.is_oracle_method("myoracle")
+    assert layout.is_oracle_method("oracles")
+    assert layout.is_oracle_method("myoracle")
+    assert layout.is_oracle_method("oracle2")
