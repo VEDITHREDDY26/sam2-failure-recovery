@@ -1,0 +1,26 @@
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+
+# Research data, model weights, caches, and generated outputs
+data/
+datasets/
+checkpoints/
+weights/
+cache/
+artifacts/raw/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS files
+.DS_Store
