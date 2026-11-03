@@ -1,0 +1,8 @@
+kind: models
+checkpoint_dir: checkpoints
+tiny:
+  model_cfg: configs/sam2.1/sam2.1_hiera_t.yaml
+  checkpoint: sam2.1_hiera_tiny.pt
+large:
+  model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
+  checkpoint: sam2.1_hiera_large.pt
