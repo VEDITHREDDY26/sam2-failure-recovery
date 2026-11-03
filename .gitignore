@@ -24,3 +24,9 @@ __pycache__/
 
 # OS files
 .DS_Store
+
+# Packaging
+.venv/
+*.egg-info/
+build/
+dist/
