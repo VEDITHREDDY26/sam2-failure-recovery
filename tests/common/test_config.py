@@ -64,6 +64,13 @@ def test_missing_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
         load_config(write(tmp_path, VALID_DATA))
 
 
+@pytest.mark.parametrize("value", ["", "  "])
+def test_empty_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str) -> None:
+    monkeypatch.setenv(DATA_ROOT_ENV, value)
+    with pytest.raises(ConfigError, match=DATA_ROOT_ENV):
+        load_config(write(tmp_path, VALID_DATA))
+
+
 def test_unknown_kind(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="mystery"):
         load_config(write(tmp_path, "kind: mystery\n"))

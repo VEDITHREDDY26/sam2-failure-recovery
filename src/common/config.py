@@ -87,7 +87,10 @@ def _expand(text: str, where: str) -> str:
         name = match.group(1)
         if name not in os.environ:
             raise ConfigError(f"{where}: environment variable {name} is not set")
-        return os.environ[name]
+        value = os.environ[name]
+        if not value.strip():
+            raise ConfigError(f"{where}: environment variable {name} is set but empty")
+        return value
 
     return _ENV_PATTERN.sub(sub, text)
 
