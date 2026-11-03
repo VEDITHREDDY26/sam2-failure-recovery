@@ -4,11 +4,11 @@
 !.env.example
 
 # Research data, model weights, caches, and generated outputs
-data/
-datasets/
-checkpoints/
-weights/
-cache/
+/data/
+/datasets/
+/checkpoints/
+/weights/
+/cache/
 artifacts/raw/
 *.pt
 *.pth
