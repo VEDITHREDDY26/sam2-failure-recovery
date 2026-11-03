@@ -83,3 +83,18 @@ def test_validation() -> None:
         masks_to_label_map({1: mask}, (3, 2))
     with pytest.raises(ValueError):
         masks_to_label_map({1: mask}, (2, 2), {})
+
+
+def test_score_tie_goes_to_smaller_id() -> None:
+    mask = np.ones((2, 2), dtype=bool)
+    scores = {4: np.full((2, 2), 1.5), 2: np.full((2, 2), 1.5)}
+    assert masks_to_label_map({4: mask, 2: mask}, (2, 2), scores).tolist() == [[2, 2], [2, 2]]
+
+
+def test_written_png_palette(tmp_path: Path) -> None:
+    path = tmp_path / "p.png"
+    write_label_map(path, np.ones((2, 2), dtype=np.uint8))
+    with Image.open(path) as image:
+        palette = image.getpalette()
+    assert palette is not None
+    assert tuple(palette[3:6]) == (128, 0, 0)
