@@ -19,7 +19,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.black]
 line-length = 100
 target-version = ["py311"]
-extend-exclude = '''/(\.venv|archive|\.[a-z]+)/|scripts/(kit_sync|gen_phases)\.py'''
+include = '^/(src|tests|scripts|experiments)/.*\.pyi?$'
 
 [tool.mypy]
 python_version = "3.11"
