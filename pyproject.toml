@@ -1,0 +1,35 @@
+[project]
+name = "sam2-failure-recovery"
+version = "0.1.0"
+description = "Training-free failure detection and recovery for SAM 2.1 video object segmentation"
+requires-python = ">=3.11,<3.12"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+extend-exclude = '''/(\.venv)/'''
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*", "sklearn", "sklearn.*", "matplotlib", "matplotlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
