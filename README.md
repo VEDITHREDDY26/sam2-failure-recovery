@@ -22,5 +22,5 @@ Colab (GPU runs):
 pip install -r requirements-colab.txt
 ```
 
-Datasets, checkpoints and cached masks live in Google Drive. The environment variable that gives
-their location is documented in `configs/`.
+Datasets, checkpoints and cached masks live in Google Drive. Set `SAM2FR_DATA_ROOT` to that Drive
+data folder (on the Mac and on Colab); every path in `configs/` is relative to it.
