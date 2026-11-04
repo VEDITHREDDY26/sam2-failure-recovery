@@ -30,3 +30,4 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+/third_party/
