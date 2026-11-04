@@ -31,7 +31,7 @@ HEIGHT, WIDTH = 16, 96
 class FakePredictor:
     """Models the SAM 2 rules that matter here.
 
-    A frame given a box is conditioning if untracked or if add_all is set; otherwise the box
+    A frame given a box is conditioning if not yet tracked (propagate marks frames tracked) or if add_all is set; otherwise the box
     only changes the mask returned by the add call. propagate_in_video reuses conditioning
     frames and re-runs every other frame from the previous frame (memory), without the box.
     """
@@ -62,7 +62,6 @@ class FakePredictor:
             state["cond"][obj_id], state["memory"][obj_id], state["tracked"][obj_id] = {}, {}, set()
         center = (box[0] + box[2]) / 2
         is_cond = frame_idx not in state["tracked"][obj_id] or self.add_all
-        state["tracked"][obj_id].add(frame_idx)
         (state["cond"] if is_cond else state["memory"])[obj_id][frame_idx] = center
         centers = {
             o: center if o == obj_id else self._stored(state, o, frame_idx) for o in state["ids"]
@@ -91,7 +90,7 @@ class FakePredictor:
                 if frame not in state["cond"][obj]:
                     prev = self._stored(state, obj, frame - 1)
                     state["memory"][obj][frame] = 0.8 * prev + 0.2 * (40 + frame)
-                    state["tracked"][obj].add(frame)
+                state["tracked"][obj].add(frame)
                 centers[obj] = self._stored(state, obj, frame)
             yield frame, list(state["ids"]), self._stack(state, frame, centers)
 
