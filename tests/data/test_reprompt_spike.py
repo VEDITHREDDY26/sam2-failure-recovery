@@ -31,8 +31,8 @@ HEIGHT, WIDTH = 16, 96
 class FakePredictor:
     """Models the SAM 2 rules that matter here.
 
-    A frame given a box is conditioning if not yet tracked (propagate marks frames tracked) or if add_all is set; otherwise the box
-    only changes the mask returned by the add call. propagate_in_video reuses conditioning
+    A frame given a box is conditioning if not yet tracked (only propagate marks frames
+    tracked) or if add_all is set; otherwise the box only changes the mask returned by the add call. propagate_in_video reuses conditioning
     frames and re-runs every other frame from the previous frame (memory), without the box.
     """
 
