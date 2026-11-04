@@ -43,11 +43,10 @@ def test_deterministic_and_well_formed(paths: dict[str, Path]) -> None:
     assert set(ids) <= set(IDS)
     header = first.splitlines()[:3]
     assert header[0] == "# SA-V test subset: seed 5415, size 60"
-    assert header[
-        2
-    ] == "# command: python -m src.data.make_subset --seed 5415 --size 60 --list-file " + str(
-        paths["list"]
+    assert header[2] == (
+        "# command: python -m src.data.make_subset --seed 5415 --size 60 --list-file sav_test.txt"
     )
+    assert str(paths["list"].parent) not in first
 
 
 def test_input_order_does_not_matter() -> None:
