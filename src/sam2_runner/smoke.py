@@ -9,9 +9,8 @@ boxes in the project Box convention (right and bottom edges exclusive).
 from __future__ import annotations
 
 import argparse
-import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,10 +25,12 @@ from src.common.layout import mask_path, signals_path
 from src.common.masks import masks_to_label_map, write_label_map
 from src.common.signals import signals_from_masks, write_signals
 from src.sam2_runner.predictor import REPO_ROOT, VideoPredictor, build_predictor, to_numpy
+from src.sam2_runner.prompts import Prompts, load_prompts, parse_prompts
 from src.sam2_runner.scores import object_score
 
 DATA_CONFIG = REPO_ROOT / "configs" / "data.yaml"
 SPLIT = "davis_val"
+__all__ = ["Prompts", "load_prompts", "parse_prompts"]
 FRAME_SUFFIXES = (".jpg", ".jpeg")
 
 
@@ -47,28 +48,6 @@ class SmokeResult:
             f"object_score source: object_score_logits for {self.stored_rows}/{total} rows, "
             f"mean-mask-logit fallback for {total - self.stored_rows}"
         )
-
-
-@dataclass(frozen=True)
-class Prompts:
-    video: str
-    frame_index: int
-    boxes: dict[int, Box]
-
-
-def parse_prompts(raw: Mapping[str, Any]) -> Prompts:
-    boxes: dict[int, Box] = {}
-    for key, coords in raw["boxes"].items():
-        if len(coords) != 4:
-            raise ValueError(f"box for object {key} needs 4 numbers, got {coords}")
-        boxes[int(key)] = Box(*(int(v) for v in coords))
-    if not boxes:
-        raise ValueError("prompts contain no boxes")
-    return Prompts(str(raw["video"]), int(raw["frame_index"]), boxes)
-
-
-def load_prompts(path: Path) -> Prompts:
-    return parse_prompts(json.loads(path.read_text()))
 
 
 def sam2_box(box: Box) -> list[float]:
