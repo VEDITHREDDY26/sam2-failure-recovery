@@ -57,7 +57,7 @@ def test_signal_csv_matches_masks(synthetic_video: SyntheticVideo, tmp_path: Pat
     assert list(path.read_text().splitlines()[0].split(",")) == list(SIGNAL_COLUMNS)
     df = read_signals(path)
     assert len(df) == 2 * synthetic_video.num_frames
-    assert df["object_score"].isna().all()
+    assert not df["object_score"].isna().any()
     for i, facts in enumerate(synthetic_video.facts):
         row1 = df[(df.object_id == 1) & (df.frame_index == i)].iloc[0]
         assert row1.area == facts.object1_area

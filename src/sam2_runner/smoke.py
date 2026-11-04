@@ -26,10 +26,27 @@ from src.common.layout import mask_path, signals_path
 from src.common.masks import masks_to_label_map, write_label_map
 from src.common.signals import signals_from_masks, write_signals
 from src.sam2_runner.predictor import REPO_ROOT, VideoPredictor, build_predictor, to_numpy
+from src.sam2_runner.scores import object_score
 
 DATA_CONFIG = REPO_ROOT / "configs" / "data.yaml"
 SPLIT = "davis_val"
 FRAME_SUFFIXES = (".jpg", ".jpeg")
+
+
+@dataclass(frozen=True)
+class SmokeResult:
+    table: pd.DataFrame
+    stored_rows: int
+
+    @property
+    def source_summary(self) -> str:
+        total = len(self.table)
+        if self.stored_rows == total:
+            return f"object_score source: object_score_logits for {total}/{total} rows"
+        return (
+            f"object_score source: object_score_logits for {self.stored_rows}/{total} rows, "
+            f"mean-mask-logit fallback for {total - self.stored_rows}"
+        )
 
 
 @dataclass(frozen=True)
@@ -72,11 +89,6 @@ def frame_stems(frames_dir: Path) -> list[str]:
     return sorted(stems, key=int)
 
 
-def object_score(obj_logits: npt.NDArray[np.floating]) -> float:
-    """Object score for one object at one frame; the single place to swap in the real source."""
-    return float("nan")
-
-
 def run_smoke(
     predictor: VideoPredictor,
     frames_dir: Path,
@@ -84,7 +96,7 @@ def run_smoke(
     output_root: Path,
     method: str,
     video: str | None = None,
-) -> pd.DataFrame:
+) -> SmokeResult:
     """Run one video; write one indexed PNG per frame and the signal CSV; return the signals."""
     video = video or prompts.video
     stems = frame_stems(frames_dir)
@@ -93,6 +105,7 @@ def run_smoke(
         predictor.add_new_points_or_box(state, prompts.frame_index, obj_id, box=sam2_box(box))
     per_object: dict[int, list[npt.NDArray[np.bool_]]] = {i: [] for i in prompts.boxes}
     scores: dict[int, list[float]] = {i: [] for i in prompts.boxes}
+    stored_rows = 0
     for count, (frame_idx, obj_ids, logits) in enumerate(predictor.propagate_in_video(state)):
         if frame_idx != count or count >= len(stems):
             raise RuntimeError(f"unexpected frame index {frame_idx} at position {count}")
@@ -100,7 +113,9 @@ def run_smoke(
         for row, obj_id in enumerate(obj_ids):
             obj_logits = to_numpy(logits[row, 0])
             per_object[obj_id].append(obj_logits > 0)
-            scores[obj_id].append(object_score(obj_logits))
+            score, stored = object_score(state, obj_id, frame_idx, obj_logits)
+            scores[obj_id].append(score)
+            stored_rows += stored
     if len(per_object[next(iter(per_object))]) != len(stems):
         raise RuntimeError(f"expected {len(stems)} frames, SAM 2 returned fewer")
     table = pd.concat(
@@ -108,7 +123,7 @@ def run_smoke(
         ignore_index=True,
     )
     write_signals(signals_path(output_root, method, SPLIT, video), table)
-    return table
+    return SmokeResult(table, stored_rows)
 
 
 def _store_frame(
@@ -145,11 +160,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     frames_dir = cfg.data_root / cfg.davis.root / "JPEGImages" / cfg.davis.resolution / args.video
     method = args.method or f"sam2_{args.model}_smoke"
     predictor = build_predictor(args.model, cfg.data_root, device=args.device)
-    table = run_smoke(predictor, frames_dir, prompts, cfg.data_root / cfg.output_root, method)
+    result = run_smoke(predictor, frames_dir, prompts, cfg.data_root / cfg.output_root, method)
+    table = result.table
     print(
         f"{method}: {args.video} {table['frame_index'].nunique()} frames, "
         f"objects {sorted(table['object_id'].unique().tolist())}"
     )
+    print(result.source_summary)
 
 
 if __name__ == "__main__":
