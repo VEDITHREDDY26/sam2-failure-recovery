@@ -22,9 +22,10 @@ from src.data.sav import list_sav_videos
 TEST_VIDEOS = 150  # dataset fact: SA-V test has 150 videos (SAM 2 README)
 DEFAULT_SEED = 5415
 DEFAULT_SIZE = 60
-DEFAULT_CONFIG = Path("configs/data.yaml")
-DEFAULT_OUTPUT = Path("configs/splits/sav_test_subset60.txt")
-DEFAULT_RESULTS = Path("results")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "data.yaml"
+DEFAULT_OUTPUT = REPO_ROOT / "configs" / "splits" / "sav_test_subset60.txt"
+DEFAULT_RESULTS = REPO_ROOT / "results"
 RESULTS_TOKEN = "sav_test"
 
 
@@ -80,7 +81,7 @@ def results_naming_sav_test(results_dir: Path) -> list[Path]:
 def _command(args: argparse.Namespace) -> str:
     parts = ["python -m src.data.make_subset", f"--seed {args.seed}", f"--size {args.size}"]
     if args.list_file is not None:
-        parts.append(f"--list-file {args.list_file}")
+        parts.append(f"--list-file {args.list_file.name}")
     return " ".join(parts)
 
 
