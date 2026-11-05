@@ -173,7 +173,7 @@ def test_incomplete_video_is_not_complete_and_clear_removes_outputs(
 
 
 class RecordingReader:
-    """Records every ground-truth read; reads are allowed only at each object's start frame."""
+    """Records every ground-truth read; reads stop at each object's start frame (earlier empty annotated frames are scanned to find it)."""
 
     def __init__(self, inner: GtReader, starts: dict[int, int]) -> None:
         self.inner = inner
@@ -185,7 +185,7 @@ class RecordingReader:
 
     def read_mask(self, obj_id: int, frame_index: int) -> BoolMask:
         self.reads.append((obj_id, frame_index))
-        if frame_index != self.starts[obj_id]:
+        if frame_index > self.starts[obj_id]:
             raise AssertionError(f"ground truth read at {obj_id}@{frame_index}")
         return self.inner.read_mask(obj_id, frame_index)
 
@@ -198,7 +198,8 @@ def test_late_start_reads_ground_truth_only_at_each_start_frame(tmp_path: Path) 
     video = dataclasses.replace(base, reader=spy)
     out = tmp_path / "out"
     result = run_video(video, CFG, out, METHOD, "sav_test")
-    assert sorted(spy.reads) == sorted(starts.items())
+    last = {obj: max(f for o, f in spy.reads if o == obj) for obj in starts}
+    assert last == starts
     late = result.status[result.status.object_id == 3].set_index("frame_index")
     assert (late.loc[: LATE_FIRST_FRAME - 1, "area"] == 0).all()
     assert late.loc[LATE_FIRST_FRAME, "area"] > 0
