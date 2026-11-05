@@ -170,3 +170,35 @@ def test_incomplete_video_is_not_complete_and_clear_removes_outputs(
     clear_video(out, METHOD, "davis_val", "zebra")
     assert not tracker_path(out, METHOD, "davis_val", "zebra").exists()
     assert not list((out / METHOD / "davis_val" / "masks" / "zebra").glob("*.png"))
+
+
+class RecordingReader:
+    """Records every ground-truth read; reads are allowed only at each object's start frame."""
+
+    def __init__(self, inner: GtReader, starts: dict[int, int]) -> None:
+        self.inner = inner
+        self.starts = starts
+        self.reads: list[tuple[int, int]] = []
+
+    def annotated_frames(self, obj_id: int) -> tuple[int, ...]:
+        return self.inner.annotated_frames(obj_id)
+
+    def read_mask(self, obj_id: int, frame_index: int) -> BoolMask:
+        self.reads.append((obj_id, frame_index))
+        if frame_index != self.starts[obj_id]:
+            raise AssertionError(f"ground truth read at {obj_id}@{frame_index}")
+        return self.inner.read_mask(obj_id, frame_index)
+
+
+def test_late_start_reads_ground_truth_only_at_each_start_frame(tmp_path: Path) -> None:
+    build_sav_root(tmp_path / "data", "sav_test")
+    base = load_sav_video(make_config(tmp_path / "data"), "test", SAV_NAME)
+    starts = {1: 0, 2: 0, 3: LATE_FIRST_FRAME}
+    spy = RecordingReader(base.reader, starts)
+    video = dataclasses.replace(base, reader=spy)
+    out = tmp_path / "out"
+    result = run_video(video, CFG, out, METHOD, "sav_test")
+    assert sorted(spy.reads) == sorted(starts.items())
+    late = result.status[result.status.object_id == 3].set_index("frame_index")
+    assert (late.loc[: LATE_FIRST_FRAME - 1, "area"] == 0).all()
+    assert late.loc[LATE_FIRST_FRAME, "area"] > 0
