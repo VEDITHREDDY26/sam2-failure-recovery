@@ -196,6 +196,8 @@ def run_video(
         )
     wall = time.perf_counter() - wall_start
     status = pd.DataFrame(rows, columns=list(STATUS_COLUMNS))
+    for column in ("tracker_ok", "x0", "y0", "x1", "y1"):
+        status[column] = status[column].astype("Int64")
     timing: dict[str, object] = {
         "video": video.name,
         "frames": video.num_frames,
