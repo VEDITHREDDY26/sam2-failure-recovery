@@ -173,7 +173,7 @@ def test_incomplete_video_is_not_complete_and_clear_removes_outputs(
 
 
 class RecordingReader:
-    """Records every ground-truth read; reads stop at each object's start frame (earlier empty annotated frames are scanned to find it)."""
+    """Records ground-truth reads; none may come after an object's start frame."""
 
     def __init__(self, inner: GtReader, starts: dict[int, int]) -> None:
         self.inner = inner
