@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import src.baseline  # noqa: F401
 from tests.fixtures.synthetic_video import SyntheticVideo, make_synthetic_video
 
 
