@@ -19,38 +19,9 @@ from pathlib import Path
 from typing import Any
 
 from src.common.config import DATA_ROOT_ENV, DataConfig
-from src.common.layout import validate_split
-from src.data.davis import list_davis_videos, load_davis_video
-from src.data.make_subset import load_subset
-from src.data.sav import list_sav_videos, load_sav_video
 from src.data.video import NeverVisibleError, VideoSample
-from src.sam2_runner.predictor import REPO_ROOT
+from src.eval.check_complete import SUBSET_FILE, load_video, split_videos
 from src.sam2_runner.smoke import load_data_config
-
-SUBSET_FILE = REPO_ROOT / "configs" / "splits" / "sav_test_subset60.txt"
-
-
-def split_videos(cfg: DataConfig, split: str, subset_file: Path = SUBSET_FILE) -> list[str]:
-    """The videos a run of this split covers (shared with the completeness check)."""
-    validate_split(split)
-    if split == "davis_val":
-        return list(list_davis_videos(cfg))
-    if split == "sav_val":
-        return list(list_sav_videos(cfg, "val"))
-    wanted = list(load_subset(subset_file))
-    available = set(list_sav_videos(cfg, "test"))
-    missing = [v for v in wanted if v not in available]
-    if missing:
-        raise ValueError(
-            f"{len(missing)} subset video(s) not in the SA-V test list: {missing[:10]}"
-        )
-    return wanted
-
-
-def load_video(cfg: DataConfig, split: str, name: str) -> VideoSample:
-    if split == "davis_val":
-        return load_davis_video(cfg, name)
-    return load_sav_video(cfg, "val" if split == "sav_val" else "test", name)
 
 
 def video_prompts(video: VideoSample) -> tuple[dict[str, Any], list[int]]:
