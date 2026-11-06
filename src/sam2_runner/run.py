@@ -1,7 +1,7 @@
 """Batch run: SAM 2 on many videos, skipping videos whose output is already complete.
 
     python -m src.sam2_runner.run --model tiny --prompts prompts.json [--videos a b]
-        [--method sam2_tiny] [--device cuda]
+        [--method sam2_tiny] [--device cuda] [--offload-video]
 
 The split comes from the prompts file (see prompts.py). Outputs go under
 <data_root>/<output_root>/<method>/<split>/.
@@ -39,6 +39,7 @@ def run_batch(
     method: str,
     make_predictor: PredictorFactory,
     videos: Sequence[str] | None = None,
+    offload_video: bool = False,
 ) -> tuple[int, int]:
     """Run every selected video that is not complete; return (run, skipped)."""
     names = list(videos) if videos else list(prompts.videos)
@@ -58,7 +59,9 @@ def run_batch(
             continue
         if predictor is None:
             predictor = make_predictor()
-        result = run_video(predictor, frames_dir, entry, output_root, method, prompts.split, video)
+        result = run_video(
+            predictor, frames_dir, entry, output_root, method, prompts.split, video, offload_video
+        )
         table = result.table
         print(
             f"{video}: done, {table['frame_index'].nunique()} frames, "
@@ -77,6 +80,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--videos", nargs="+", default=None)
     parser.add_argument("--method", default=None)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--offload-video",
+        action="store_true",
+        help="keep the decoded video frames on the CPU (long videos on smaller GPUs)",
+    )
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
@@ -89,6 +97,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         method,
         lambda: build_predictor(args.model, cfg.data_root, device=args.device),
         args.videos,
+        args.offload_video,
     )
 
 

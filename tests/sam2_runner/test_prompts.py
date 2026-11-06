@@ -26,7 +26,7 @@ def test_per_object_form_and_mixed_form() -> None:
     p = parse_prompts(raw)
     assert p.boxes[3] == Box(1, 2, 5, 6)
     assert [p.start_frame(i) for i in (1, 2, 3)] == [0, 8, 8]
-    assert p.groups() == {0: [1], 8: [2, 3]}
+    assert p.groups() == {0: [1], 8: [3, 2]}
 
 
 def test_video_frame_may_be_left_out_when_every_entry_has_its_own() -> None:

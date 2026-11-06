@@ -1,8 +1,9 @@
 """Seam between this project and SAM 2's video predictor.
 
-The protocol mirrors the three SAM2VideoPredictor methods the project calls (pinned source:
-sam2/sam2_video_predictor.py). torch and sam2 are imported only inside `build_predictor`,
-so everything else runs on a CPU-only machine with a fake predictor.
+The protocol mirrors the four SAM2VideoPredictor methods the project calls (pinned source:
+sam2/sam2_video_predictor.py; reset_state clears all objects and prompts but keeps the loaded
+frames). torch and sam2 are imported only inside `build_predictor`, so everything else runs on
+a CPU-only machine with a fake predictor.
 """
 
 from __future__ import annotations
@@ -50,6 +51,8 @@ class VideoPredictor(Protocol):
         max_frame_num_to_track: int | None = None,
         reverse: bool = False,
     ) -> Iterator[tuple[int, list[int], Any]]: ...
+
+    def reset_state(self, inference_state: Any) -> None: ...
 
 
 def to_numpy(value: Any) -> npt.NDArray[Any]:

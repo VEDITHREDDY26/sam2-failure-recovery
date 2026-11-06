@@ -35,9 +35,9 @@ class Prompts:
         return self.object_frames.get(obj_id, self.frame_index)
 
     def groups(self) -> dict[int, list[int]]:
-        """Object ids by prompt frame, ascending frame and ascending id."""
+        """Object ids by prompt frame (ascending), each in the order the boxes were given."""
         found: dict[int, list[int]] = {}
-        for obj_id in sorted(self.boxes):
+        for obj_id in self.boxes:
             found.setdefault(self.start_frame(obj_id), []).append(obj_id)
         return dict(sorted(found.items()))
 
