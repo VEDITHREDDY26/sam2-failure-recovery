@@ -47,7 +47,9 @@ COLUMNS = (
 )
 
 
-def summarise(model: str, split: str, labels: pd.DataFrame, videos: int, skipped: int) -> dict:  # type: ignore[type-arg]
+def summarise(
+    model: str, split: str, labels: pd.DataFrame, videos: int, skipped: int
+) -> dict[str, object]:
     failures = labels[labels["failure"]]
     frames = len(labels)
     return {
@@ -64,7 +66,9 @@ def summarise(model: str, split: str, labels: pd.DataFrame, videos: int, skipped
     }
 
 
-def stats_for_run(model: str, split: str, prefix: str, subset_file: Path) -> dict | None:  # type: ignore[type-arg]
+def stats_for_run(
+    model: str, split: str, prefix: str, subset_file: Path
+) -> dict[str, object] | None:
     """Summary row for one run, or None (after saying why) if the run is incomplete."""
     cfg = load_data_config()
     method = validate_method(f"{prefix}_{model}")
