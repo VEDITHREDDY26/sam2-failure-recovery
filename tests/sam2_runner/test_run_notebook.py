@@ -132,3 +132,37 @@ def test_pilot_cells_run_on_a_fake_tree(tmp_path: Path, monkeypatch: pytest.Monk
     before = scope["before"]
     assert len(before) == 8 and before["empty"].all() and before.object_score.isna().all()  # type: ignore[index,attr-defined]
     assert scope["PILOT_START"] == 8 and len(signals) > 0  # type: ignore[arg-type]
+
+
+def _assigned_names(source: str) -> set[str]:
+    """Names bound by assignment, import or for-loop in one cell (shell lines become pass)."""
+    lines = [
+        (
+            line[: len(line) - len(line.lstrip())] + "pass"
+            if line.lstrip().startswith(("!", "%"))
+            else line
+        )
+        for line in source.splitlines()
+    ]
+    names: set[str] = set()
+    for node in ast.walk(ast.parse("\n".join(lines))):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+    return names
+
+
+def test_shell_lines_use_only_names_defined_in_earlier_cells() -> None:
+    """A {NAME} in a ! line must be bound in that cell or an earlier one (in notebook order)."""
+    nb = json.loads(NOTEBOOK.read_text())
+    defined: set[str] = set()
+    for index, cell in enumerate(nb["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        source = "".join(cell["source"])
+        defined |= _assigned_names(source)
+        for line in source.splitlines():
+            if line.lstrip().startswith("!"):
+                for name in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)", line):
+                    assert name in defined, f"cell {index}: {{{name}}} used before it is defined"
