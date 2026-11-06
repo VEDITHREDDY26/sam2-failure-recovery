@@ -184,6 +184,9 @@ def test_local_disk_cell_unpacks_sav_tars_once(
     build_world(world)
     drive = tmp_path / "drive"
     shutil.copytree(world / "DAVIS", drive / "DAVIS")
+    extra = drive / "DAVIS" / "JPEGImages" / "480p" / "train_only"  # not in val.txt: not copied
+    extra.mkdir()
+    (extra / "00000.jpg").write_bytes(b"x")
     (drive / "sav_tars").mkdir()
     for split in ("sav_val", "sav_test"):
         tar = drive / "sav_tars" / f"{split}.tar"
@@ -201,9 +204,11 @@ def test_local_disk_cell_unpacks_sav_tars_once(
     cfg = load_data_config()
     assert cfg.data_root == local
     assert sorted(list_davis_videos(cfg)) == sorted(DAVIS)
+    assert not (local / "DAVIS" / "JPEGImages" / "480p" / "train_only").exists()
+    out = capsys.readouterr().out
+    assert f"DAVIS {len(DAVIS)}/{len(DAVIS)}" in out and "unpacking" in out
     assert list_sav_videos(cfg, "val") == SAV_VAL
     assert list_sav_videos(cfg, "test") == SAV_TEST
-    assert "unpacking" in capsys.readouterr().out
 
     exec(cell, {"DRIVE_DATA_ROOT": str(drive)})  # second run: nothing unpacked again
     out = capsys.readouterr().out
