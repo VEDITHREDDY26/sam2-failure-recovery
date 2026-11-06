@@ -166,3 +166,73 @@ def test_shell_lines_use_only_names_defined_in_earlier_cells() -> None:
             if line.lstrip().startswith("!"):
                 for name in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)", line):
                     assert name in defined, f"cell {index}: {{{name}}} used before it is defined"
+
+
+def test_local_disk_cell_unpacks_sav_tars_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Drive holds DAVIS unpacked and SA-V only as tars; the cell builds the local root."""
+    import shutil
+    import subprocess
+
+    from src.data.davis import list_davis_videos
+    from src.data.sav import list_sav_videos
+    from src.sam2_runner.smoke import load_data_config
+    from tests.eval.sam2_trees import DAVIS, SAV_TEST, SAV_VAL, build_world
+
+    world = tmp_path / "world"
+    build_world(world)
+    drive = tmp_path / "drive"
+    shutil.copytree(world / "DAVIS", drive / "DAVIS")
+    (drive / "sav_tars").mkdir()
+    for split in ("sav_val", "sav_test"):
+        tar = drive / "sav_tars" / f"{split}.tar"
+        subprocess.run(["tar", "-cf", str(tar), "-C", str(world / "SA-V"), split], check=True)
+    local = tmp_path / "local"
+    monkeypatch.setenv("SAM2FR_LOCAL_ROOT", str(local))
+    monkeypatch.setenv("SAM2FR_DATA_ROOT", str(drive))  # the cell overwrites it; restored after
+    cell = next(c for c in _cells() if "def local_sav_split" in c)
+
+    scope: dict[str, object] = {"DRIVE_DATA_ROOT": str(drive)}
+    exec(cell, scope)
+    assert scope["PROMPTS_DIR"] == local / "outputs" / "prompts"
+    assert (local / "outputs").resolve() == (drive / "outputs").resolve()
+    assert (local / "checkpoints").resolve() == (drive / "checkpoints").resolve()
+    cfg = load_data_config()
+    assert cfg.data_root == local
+    assert sorted(list_davis_videos(cfg)) == sorted(DAVIS)
+    assert list_sav_videos(cfg, "val") == SAV_VAL
+    assert list_sav_videos(cfg, "test") == SAV_TEST
+    assert "unpacking" in capsys.readouterr().out
+
+    exec(cell, {"DRIVE_DATA_ROOT": str(drive)})  # second run: nothing unpacked again
+    out = capsys.readouterr().out
+    assert "unpacking" not in out and out.count("already on the local disk") == 2
+
+    (local / "SA-V" / "sav_val" / ".unpacked").unlink()  # as if the session died mid-unpack
+    (local / "SA-V" / "sav_val" / "sav_val.txt").unlink()
+    exec(cell, {"DRIVE_DATA_ROOT": str(drive)})
+    assert "sav_val: unpacking" in capsys.readouterr().out
+    assert list_sav_videos(load_data_config(), "val") == SAV_VAL
+
+
+def test_local_disk_cell_names_the_missing_tar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.data.helpers import build_davis_root
+
+    drive = tmp_path / "drive"
+    build_davis_root(drive)
+    monkeypatch.setenv("SAM2FR_LOCAL_ROOT", str(tmp_path / "local"))
+    monkeypatch.setenv("SAM2FR_DATA_ROOT", str(drive))
+    cell = next(c for c in _cells() if "def local_sav_split" in c)
+    with pytest.raises(FileNotFoundError, match="sav_tars/sav_val.tar"):
+        exec(cell, {"DRIVE_DATA_ROOT": str(drive)})
+
+
+def test_data_check_cell_follows_the_local_disk_cell() -> None:
+    cells = _cells()
+    local = next(i for i, c in enumerate(cells) if "def local_sav_split" in c)
+    check = next(i for i, c in enumerate(cells) if "src.data.check --dataset sav --split test" in c)
+    prompts = next(i for i, c in enumerate(cells) if "make_prompts --split davis_val" in c)
+    assert local < check < prompts
