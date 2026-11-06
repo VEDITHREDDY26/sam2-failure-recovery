@@ -1,6 +1,7 @@
 import ast
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -75,3 +76,59 @@ def test_code_cells_parse_apart_from_shell_magics() -> None:
             for line in lines
         )
         ast.parse(plain)
+
+
+def test_pilot_and_failure_stats_cells_are_placed_around_the_runs(code: str) -> None:
+    first_run = code.index("src.sam2_runner.run --model tiny --prompts")
+    assert code.index("--method sam2_tiny_pilot") < first_run
+    assert "--method sam2_tiny " not in code and "--method sam2_tiny\n" not in code
+    assert code.index("sam2_tiny_pilot") < first_run
+    score = code.index("experiments.sam2_runs.score_all")
+    stats = code.index("experiments.sam2_runs.failure_stats")
+    assert score < stats < code.index('glob("failure_stats.csv")')
+    assert "results/failure_stats.csv" in code and "expected 13" in code
+
+
+def _cells() -> list[str]:
+    nb = json.loads(NOTEBOOK.read_text())
+    return ["".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code"]
+
+
+def _plain(cell: str) -> str:
+    return "\n".join(
+        "pass" if line.lstrip().startswith(("!", "%")) else line for line in cell.splitlines()
+    )
+
+
+def test_pilot_cells_run_on_a_fake_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.sam2_runner.prompts import parse_batch_prompts
+    from src.sam2_runner.run import run_batch
+    from src.sam2_runner.smoke import load_data_config
+    from tests.eval.sam2_trees import build_world, run_split
+    from tests.fixtures.synthetic_video import make_synthetic_video
+    from tests.sam2_runner.fakes import FakePredictor
+
+    root = tmp_path / "drive"
+    monkeypatch.setenv("SAM2FR_DATA_ROOT", str(root))
+    subset = build_world(root)
+    source = make_synthetic_video(root / "fake_source", "source")
+    run_split(root, "tiny", "sav_val", subset, source)
+    cfg = load_data_config()
+    first = next(c for c in _cells() if "PILOT_VIDEO, PILOT_OBJ, PILOT_START" in c)
+    second = next(c for c in _cells() if "late = signals[" in c)
+    scope: dict[str, object] = {
+        "PROMPTS_DIR": cfg.data_root / cfg.output_root / "prompts",
+        "cfg": cfg,
+    }
+    exec(_plain(first), scope)
+    assert (scope["PILOT_VIDEO"], scope["PILOT_OBJ"], scope["PILOT_START"]) == ("vid_a", 3, 8)
+    pilot_file = scope["pilot_file"]
+    assert isinstance(pilot_file, Path)
+    prompts = parse_batch_prompts(json.loads(pilot_file.read_text()))
+    assert list(prompts.videos) == ["vid_a"]
+    run_batch(prompts, cfg, "sam2_tiny_pilot", lambda: FakePredictor(source))
+    exec(second, scope)
+    signals = scope["signals"]
+    before = scope["before"]
+    assert len(before) == 8 and before["empty"].all() and before.object_score.isna().all()  # type: ignore[index,attr-defined]
+    assert scope["PILOT_START"] == 8 and len(signals) > 0  # type: ignore[arg-type]
