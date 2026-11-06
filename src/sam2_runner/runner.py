@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ from src.common.signals import SIGNAL_COLUMNS, read_signals, write_signals
 from src.sam2_runner.predictor import VideoPredictor, to_numpy
 from src.sam2_runner.prompts import Prompts
 from src.sam2_runner.scores import object_score
+from src.sam2_runner.timing import read_timing, timing_path, timing_row, write_timing
 
 FRAME_SUFFIXES = (".jpg", ".jpeg")
 TEMP_SUFFIX = ".tmp"
@@ -77,7 +79,7 @@ def is_complete(
     stems: Sequence[str],
     obj_ids: Sequence[int],
 ) -> bool:
-    """True only if the signal CSV is valid with one row per (object, frame) and all PNGs exist."""
+    """True only if signals are valid (one row per object and frame), timing and all PNGs exist."""
     csv_path = signals_path(output_root, method, split, video)
     if not csv_path.is_file():
         return False
@@ -91,12 +93,15 @@ def is_complete(
         return False
     if set(table["video"]) != {video}:
         return False
+    if read_timing(timing_path(output_root, method, split, video), video) is None:
+        return False
     return all(mask_path(output_root, method, split, video, s).is_file() for s in stems)
 
 
 def clear_video(output_root: Path, method: str, split: str, video: str) -> None:
-    """Delete this video's masks and signal file (and a leftover temp file) under the run dir."""
+    """Delete this video's masks, timing and signal file (and a leftover temp file)."""
     shutil.rmtree(masks_dir(output_root, method, split, video), ignore_errors=True)
+    timing_path(output_root, method, split, video).unlink(missing_ok=True)
     csv_path = signals_path(output_root, method, split, video)
     csv_path.unlink(missing_ok=True)
     csv_path.with_name(csv_path.name + TEMP_SUFFIX).unlink(missing_ok=True)
@@ -118,6 +123,7 @@ def run_video(
     pass, passes run in ascending start order. Before its start frame an object has an empty
     mask and a NaN object score (SAM 2 produced no output).
     """
+    wall_start = time.perf_counter()
     stems = frame_stems(frames_dir)
     clear_video(output_root, method, split, video)
     groups = prompts.groups()
@@ -130,12 +136,17 @@ def run_video(
         for position, (start, obj_ids) in enumerate(groups.items()):
             if position:
                 predictor.reset_state(state)
+            tick = time.perf_counter()
             for obj_id in obj_ids:
                 box = sam2_box(prompts.boxes[obj_id])
                 predictor.add_new_points_or_box(state, start, obj_id, box=box)
+            counts.compute_s += time.perf_counter() - tick
             _propagate_group(predictor, state, start, len(stems), sink, rows, counts, video)
         sink.finish()
     table = _signal_table(video, rows, prompts, len(stems))
+    wall_s = time.perf_counter() - wall_start
+    row = timing_row(video, len(stems), len(rows), counts.compute_s, wall_s, offload_video)
+    write_timing(timing_path(output_root, method, split, video), row)
     _write_signals_atomic(signals_path(output_root, method, split, video), table)
     unavailable = sum(start * len(ids) for start, ids in groups.items())
     return RunResult(table, counts.stored, unavailable)
@@ -144,6 +155,7 @@ def run_video(
 @dataclass
 class _Counts:
     stored: int = 0
+    compute_s: float = 0.0
 
 
 SignalRow = tuple[str, int, int, float, int, float, float, bool]
@@ -171,19 +183,22 @@ def _propagate_group(
     video: str,
 ) -> None:
     seen = 0
-    # to_numpy moves every output to the CPU, which waits for the GPU, so timings taken around
-    # this loop include the finished computation without an explicit synchronise.
+    # to_numpy moves every output to the CPU, which waits for the GPU, so the timings taken
+    # around SAM 2's work include the finished computation without an explicit synchronise.
+    tick = time.perf_counter()
     for frame_idx, obj_ids, logits in predictor.propagate_in_video(state, start_frame_idx=start):
         if frame_idx != start + seen or frame_idx >= num_frames:
             raise RuntimeError(f"unexpected frame index {frame_idx} at position {start + seen}")
         ids = list(obj_ids)
         arrays = {obj_id: to_numpy(logits[row, 0]) for row, obj_id in enumerate(ids)}
+        counts.compute_s += time.perf_counter() - tick
         sink.add(frame_idx, arrays)
         for obj_id, obj_logits in arrays.items():
             score, stored = object_score(state, obj_id, frame_idx, obj_logits)
             rows[obj_id].append(signal_row(video, obj_id, frame_idx, obj_logits > 0, score))
             counts.stored += stored
         seen += 1
+        tick = time.perf_counter()
     if start + seen != num_frames:
         raise RuntimeError(f"expected {num_frames - start} frames from {start}, got {seen}")
 
