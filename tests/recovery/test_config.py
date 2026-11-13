@@ -7,7 +7,9 @@ from src.recovery.config import RecoveryRunConfig, load_recovery_config
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
-    p for p in (ROOT / "configs" / "recovery").glob("*.yaml") if p.name != "box_check.yaml"
+    p
+    for p in (ROOT / "configs" / "recovery").glob("*.yaml")
+    if p.name not in ("box_check.yaml", "recovery.yaml")
 ) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
 
 
