@@ -1,0 +1,3 @@
+kind: recovery
+cooldown_frames: 12
+tracker_mode: reinit
