@@ -1,0 +1,6 @@
+kind: recovery_run
+method: fix_rules_no_low_score_csrt_tiny
+detector: rules
+box_source: csrt
+tracker_mode: ""
+disabled_rules: [low_score]

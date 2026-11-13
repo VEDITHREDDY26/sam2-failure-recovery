@@ -16,7 +16,7 @@ SHIPPED = sorted(
 
 
 def test_shipped_configs_exist() -> None:
-    assert len(SHIPPED) == 7
+    assert len(SHIPPED) == 11
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
