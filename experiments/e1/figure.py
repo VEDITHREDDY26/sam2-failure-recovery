@@ -41,7 +41,7 @@ def plot_jf_fps(table_path: Path, figure_dir: Path) -> Path:
     ax.set_xlabel("Test set")
     ax.set_ylabel("J&F (mean over objects)")
     ax.set_ylim(*Y_RANGE)
-    ax.legend(loc="upper left", fontsize=8)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3, fontsize=8)
     fig.tight_layout()
     figure_dir.mkdir(parents=True, exist_ok=True)
     path = figure_dir / FIGURE_NAME
