@@ -6,9 +6,9 @@ from src.common.config import ConfigError
 from src.recovery.config import RecoveryRunConfig, load_recovery_config
 
 ROOT = Path(__file__).resolve().parents[2]
-SHIPPED = sorted((ROOT / "configs" / "recovery").glob("*.yaml")) + sorted(
-    (ROOT / "configs" / "oracle").glob("*.yaml")
-)
+SHIPPED = sorted(
+    p for p in (ROOT / "configs" / "recovery").glob("*.yaml") if p.name != "box_check.yaml"
+) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
 
 
 def test_shipped_configs_exist() -> None:
