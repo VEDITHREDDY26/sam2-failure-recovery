@@ -119,7 +119,7 @@ def test_runner_reprompts_where_ground_truth_says_failure(tree: Any) -> None:
     assert np.array_equal(before == 1, expected_mask(START_BOX, 0, 4))
 
 
-def test_oracle_method_name_is_needed_for_oracle_pieces_not_enforced_here(tree: Any) -> None:
+def test_oracle_runs_cannot_write_into_a_sam2_alone_folder(tree: Any) -> None:
     cfg, prompts, out = tree
     with pytest.raises(ValueError, match="never writes"):
         run(cfg, prompts, method="sam2_tiny")
