@@ -4,8 +4,8 @@
         --prompts prompts/davis_val.json [--videos a b] [--device cuda] [--offload-video]
 
 Refused unless configs/learned/logreg_<model>.json exists and its sha256 equals the hash pinned
-in configs/learned/logreg_<model>.sha256 (written by experiments.e5.train; record that hash in
-docs/decisions.md before any test-set run). davis_val and sav_test only: SA-V val is the data the
+in configs/learned/logreg_<model>.sha256 (written by experiments.e5.train before any
+test-set run). davis_val and sav_test only: SA-V val is the data the
 detector was fitted on. Everything else is the E2 run (same recovery settings, same CSRT source).
 """
 

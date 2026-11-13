@@ -253,7 +253,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(f"e5 train: refused: {error}\n")
         return 1
     for model, digest in hashes.items():
-        sys.stdout.write(f"{model} ({SPLIT}): sha256 {digest}  record it in docs/decisions.md\n")
+        sys.stdout.write(f"{model} ({SPLIT}): sha256 {digest}  record it before any test-set run\n")
     return 0
 
 
