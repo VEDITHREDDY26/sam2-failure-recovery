@@ -79,6 +79,16 @@ def test_window_max_and_threshold_by_hand() -> None:
     assert np.isnan(train.pr_auc(scores, np.zeros(4, dtype=bool)))
 
 
+def test_capped_threshold_respects_the_flag_rate_on_train_windows() -> None:
+    truth = np.array([True] * 4 + [False] * 16)
+    best = np.array([0.9, 0.9, 0.5, 0.5, 0.5] + [0.1] * 15)
+    assert train.choose_threshold(best, truth) == 0.5  # flags 5/20, F1 8/9
+    capped = train.choose_threshold(best, truth, 0.10)
+    assert capped == 0.9 and (best >= capped).sum() <= 0.10 * len(truth)
+    with pytest.raises(ValueError, match="no threshold"):
+        train.choose_threshold(np.full(20, 0.99), truth, 0.10)
+
+
 def run(tmp_path: Path, **kw: object) -> dict[str, str]:
     root = write_world(tmp_path / "data", 10, models=("tiny",))
     return train.run(  # type: ignore[arg-type]
@@ -94,7 +104,14 @@ def test_run_writes_hashed_artifact_and_tables(tmp_path: Path) -> None:
     assert load_pinned("tiny", tmp_path / "learned").sam2_model == "tiny"
     detector = pd.read_csv(tmp_path / "results" / "e5_detector.csv")
     assert list(detector.columns) == list(train.DETECTOR_COLUMNS)
-    assert detector["method"].tolist() == ["logreg", "rules"]
+    assert detector["method"].tolist() == ["logreg", "logreg", "rules"]
+    assert detector["selection"].tolist() == ["f1_protocol", "f1_flag_cap_0.10", "rules_frozen"]
+    assert detector["frozen"].tolist() == [False, True, True]
+    frozen_row = detector[detector["frozen"] & (detector["method"] == "logreg")].iloc[0]
+    assert load_pinned("tiny", tmp_path / "learned").threshold == pytest.approx(
+        frozen_row["threshold"]
+    )
+    assert frozen_row["threshold"] >= detector["threshold"].iloc[0]
     assert (detector["train_videos"] == 8).all() and (detector["heldout_videos"] == 2).all()
     assert detector["windows"].nunique() == 1
     weights = pd.read_csv(tmp_path / "results" / "e5_weights.csv")

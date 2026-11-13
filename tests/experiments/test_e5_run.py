@@ -121,8 +121,41 @@ def write_results(results: Path, learned_objects: int = 2) -> None:
                 results / f"events_{method}_davis_val.csv", index=False
             )
     det = [
-        ("tiny", "logreg", 8, 2, 30, 10, 12, 8, 0.67, 0.8, 0.73, 0.77, 0.4),
-        ("tiny", "rules", 8, 2, 30, 10, 14, 7, 0.5, 0.7, 0.58, np.nan, np.nan),
+        ("tiny", "logreg", 8, 2, 30, 10, 25, 9, 0.36, 0.9, 0.51, 0.77, 0.2, "f1_protocol", False),
+        (
+            "tiny",
+            "logreg",
+            8,
+            2,
+            30,
+            10,
+            12,
+            8,
+            0.67,
+            0.8,
+            0.73,
+            0.77,
+            0.4,
+            "f1_flag_cap_0.10",
+            True,
+        ),
+        (
+            "tiny",
+            "rules",
+            8,
+            2,
+            30,
+            10,
+            14,
+            7,
+            0.5,
+            0.7,
+            0.58,
+            np.nan,
+            np.nan,
+            "rules_frozen",
+            True,
+        ),
     ]
     pd.DataFrame(det, columns=list(table.DETECTOR_COLUMNS)).to_csv(
         results / "e5_detector.csv", index=False
