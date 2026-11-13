@@ -16,7 +16,7 @@ SHIPPED = sorted(
 
 
 def test_shipped_configs_exist() -> None:
-    assert len(SHIPPED) == 11
+    assert len(SHIPPED) == 12
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
@@ -112,3 +112,17 @@ def test_name_must_say_which_rule_is_off() -> None:
         RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt", "", [])
     with pytest.raises(ConfigError):
         RecoveryRunConfig("fix_no_bogus_tiny", "rules", "csrt", "", ["bogus"])
+
+
+def _learned(method: str, detector: str) -> RecoveryRunConfig:
+    return RecoveryRunConfig(
+        method=method, detector=detector, box_source="csrt", tracker_mode="", disabled_rules=[]
+    )
+
+
+def test_learned_in_the_name_iff_the_detector_is_learned() -> None:
+    assert _learned("fix_learned_csrt_tiny", "learned").detector == "learned"
+    with pytest.raises(ConfigError):
+        _learned("fix_rules_csrt_tiny", "learned")
+    with pytest.raises(ConfigError):
+        _learned("fix_learned_csrt_tiny", "rules")

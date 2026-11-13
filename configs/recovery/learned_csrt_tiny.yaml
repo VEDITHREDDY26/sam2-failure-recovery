@@ -1,0 +1,6 @@
+kind: recovery_run
+method: fix_learned_csrt_tiny
+detector: learned
+box_source: csrt
+tracker_mode: ""
+disabled_rules: []

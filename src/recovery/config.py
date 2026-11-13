@@ -13,7 +13,7 @@ from pathlib import Path
 from src.common.config import ConfigError, load_config, register
 from src.common.layout import is_oracle_method, validate_method
 
-DETECTORS = ("rules", "oracle")
+DETECTORS = ("rules", "learned", "oracle")
 BOX_SOURCES = ("csrt", "oracle")
 TRACKER_MODES = ("reinit", "continuous")
 RULE_NAMES = ("low_score", "area_change", "centre_jump", "disappearance")
@@ -53,6 +53,8 @@ class RecoveryRunConfig:
         unknown = [r for r in self.disabled_rules if r not in RULE_NAMES]
         if unknown or len(set(self.disabled_rules)) != len(self.disabled_rules):
             raise ConfigError(f"disabled_rules must be distinct names from {RULE_NAMES}")
+        if ("learned" in self.method) != (self.detector == "learned"):
+            raise ConfigError(f"'{self.method}': 'learned' in the name iff detector is learned")
         if ("continuous" in self.method) != (self.tracker_mode == "continuous"):
             raise ConfigError(f"'{self.method}': 'continuous' in the name iff tracker_mode is")
         for rule in RULE_NAMES:
