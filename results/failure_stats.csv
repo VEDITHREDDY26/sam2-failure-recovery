@@ -1,0 +1,7 @@
+model,split,videos,objects,skipped_objects,labelled_frames,failure_frames,failure_rate,objects_with_failure,videos_with_failure
+tiny,davis_val,30,61,0,3984,489,0.12274096385542169,17,10
+tiny,sav_val,155,293,0,31967,8239,0.2577345387430788,270,145
+tiny,sav_test,60,105,0,11138,2895,0.25992099120129286,90,54
+large,davis_val,30,61,0,3984,457,0.11470883534136546,14,8
+large,sav_val,155,293,0,31967,6778,0.21203115713079113,263,146
+large,sav_test,60,105,0,11138,2164,0.19428981863889389,88,52

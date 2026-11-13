@@ -1,0 +1,4 @@
+kind: baseline
+grabcut_iterations: 5
+roi_margin_frac: 0.25
+min_box_side: 4
