@@ -3,7 +3,7 @@
     python -m scripts.make_demo --selection results/e10_selection.csv \
         --out <path outside the repo>.mp4 [--before 15] [--after 30] [--fps 10]
 
-Each clip is a window around its selected frame (rule in docs/decisions.md) and starts with a
+Each clip is a window around its selected frame (rule in experiments/e10_overlays/select.py) and starts with a
 title card naming the video, the role, both J&F values and the results file it traces to. Clips
 of an oracle method are captioned ORACLE. The video is never written inside the repository: the
 output path is refused if it lies in it, and it is meant for Drive.
