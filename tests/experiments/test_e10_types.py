@@ -89,7 +89,9 @@ def world(tmp_path: Path) -> tuple[Path, Path, sample.LoadVideo]:
 def test_candidates_rules(world: tuple[Path, Path, sample.LoadVideo]) -> None:
     out, results, load = world
     cand = sample.build_candidates(results, out, load)
-    keys = list(zip(cand["split"], cand["video"], cand["frame_index"], cand["gt_frame_index"]))
+    keys = list(
+        zip(cand["split"], cand["video"], cand["frame_index"], cand["gt_frame_index"], strict=True)
+    )
     assert keys == [
         ("davis_val", "a", 16, 16),
         ("davis_val", "a", 25, 25),
