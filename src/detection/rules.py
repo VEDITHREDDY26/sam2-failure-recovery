@@ -100,9 +100,9 @@ def evidence(obs: FrameObs, prev: FrameObs | None) -> Evidence:
             jump = dist / math.sqrt(prev.area)
         else:
             box = prev.box
-            assert box is not None
             fraction = prev.area / (prev.height * prev.width)
-            margin = float(min(box.x0, box.y0, prev.width - box.x1, prev.height - box.y1))
+            if box is not None:
+                margin = float(min(box.x0, box.y0, prev.width - box.x1, prev.height - box.y1))
     return Evidence(obs.object_score, area_ratio, jump, fraction, margin)
 
 

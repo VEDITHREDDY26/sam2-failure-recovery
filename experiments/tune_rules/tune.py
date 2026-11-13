@@ -12,6 +12,10 @@ window is the frames (previous annotated frame, t_a]; it is positive when any ru
 its truth is the failure label at t_a. Precision / recall / F1 are pooled over all windows.
 Search = exhaustive over the grids below, all four rules on; ties -> fewer flagged windows, then
 the earlier grid point (order: score, area, jump, min fraction, border; each grid ascending).
+Two points are computed per model: the protocol point (no cap) and the capped point, the best F1
+among grid points that flag at most FROZEN_MAX_FLAG_RATE of all windows (2026-11-13 decision, a
+module constant with no command-line option). Only the capped thresholds go to the config (the
+frozen detector); the results CSV has both rows (`selection`, `frozen`).
 Nothing is written unless every check passes.
 """
 
@@ -41,8 +45,11 @@ from src.detection.rules import (
     RuleThresholds,
     batch_evidence,
 )
-from src.detection.signals import join_signals_boxes
+from src.detection.signals import count_overlapped, join_signals_boxes
 
+FROZEN_MAX_FLAG_RATE = 0.10
+SELECTION_PROTOCOL = "f1_protocol"
+SELECTION_CAPPED = f"f1_flag_cap_{FROZEN_MAX_FLAG_RATE:.2f}"
 SPLIT = "sav_val"
 EXPECTED_VIDEOS = 155
 FORBIDDEN = ("davis", "sav_test")
@@ -199,9 +206,14 @@ def search(
     move: list[BoolArray],
     gone: list[BoolArray],
     truth: BoolArray,
+    max_flag_rate: float | None = None,
 ) -> tuple[tuple[int, int, int, int, int], int, int]:
-    """Best grid point (indices in grid order), its flagged and tp counts."""
+    """Best grid point (indices in grid order), its flagged and tp counts.
+
+    With max_flag_rate, only points flagging at most that share of all windows are eligible.
+    """
     positives = int(truth.sum())
+    budget = None if max_flag_rate is None else int(np.floor(max_flag_rate * len(truth) + 1e-9))
     grid_shape = (
         len(low),
         len(area),
@@ -222,7 +234,11 @@ def search(
             flagged = flags.sum(axis=2, dtype=np.int64)
             tp = (flags & truth).sum(axis=2, dtype=np.int64)
             f1 = _f1_array(tp, flagged, positives)
+            if budget is not None:
+                f1 = np.where(flagged <= budget, f1, -1.0)
             top = float(f1.max())
+            if top < 0:
+                continue
             cand = np.argwhere(f1 == top)
             if best is not None and top < best[0]:
                 continue
@@ -235,6 +251,8 @@ def search(
                     best = (top, key_flagged, rank)
                     best_point = point
                     best_counts = (key_flagged, int(tp[i_move, i_gone]))
+    if best is None:
+        raise TuneInputError(f"no grid point flags at most {max_flag_rate} of the windows")
     return best_point, best_counts[0], best_counts[1]
 
 
@@ -264,10 +282,13 @@ def rule_window_flags(
     return {name: window_any(frame[name], windows) for name in ALL_RULES}
 
 
-def tune_model(table: pd.DataFrame, labels: pd.DataFrame) -> Choice:
-    windows = build_windows(table, labels)
-    low, area, move, gone = rule_vectors(table, windows)
-    point, flagged, tp = search(low, area, move, gone, windows.truth)
+def _choice_at(
+    table: pd.DataFrame,
+    windows: Windows,
+    point: tuple[int, int, int, int, int],
+    flagged: int,
+    tp: int,
+) -> Choice:
     cfg = thresholds_at(point)
     per_rule = rule_window_flags(table, windows, cfg)
     return Choice(
@@ -279,6 +300,15 @@ def tune_model(table: pd.DataFrame, labels: pd.DataFrame) -> Choice:
         {name: int(per_rule[name].sum()) for name in ALL_RULES},
         {name: int((per_rule[name] & windows.truth).sum()) for name in ALL_RULES},
     )
+
+
+def tune_model(table: pd.DataFrame, labels: pd.DataFrame) -> tuple[Choice, Choice]:
+    """(protocol choice without a cap, choice under FROZEN_MAX_FLAG_RATE)."""
+    windows = build_windows(table, labels)
+    vectors = rule_vectors(table, windows)
+    protocol = search(*vectors, windows.truth)
+    capped = search(*vectors, windows.truth, FROZEN_MAX_FLAG_RATE)
+    return _choice_at(table, windows, *protocol), _choice_at(table, windows, *capped)
 
 
 def load_model_inputs(
@@ -308,15 +338,25 @@ def load_model_inputs(
     if len(files) != expect_videos:
         raise TuneInputError(f"{model}: {len(files)} videos, expected {expect_videos}")
     signals = pd.concat([read_signals(p) for p in files.values()], ignore_index=True)
-    return join_signals_boxes(signals, boxes), labels
+    return join_signals_boxes(signals, boxes, allow_overlapped=True), labels
 
 
-def results_row(model: str, choice: Choice, videos: int) -> dict[str, object]:
+def results_row(
+    model: str,
+    choice: Choice,
+    videos: int,
+    overlapped_rows: int = 0,
+    selection: str = SELECTION_CAPPED,
+    frozen: bool = True,
+) -> dict[str, object]:
     cfg = choice.thresholds
     row: dict[str, object] = {
         "model": model,
         "split": SPLIT,
+        "selection": selection,
+        "frozen": frozen,
         "videos": videos,
+        "overlapped_rows": overlapped_rows,
         **dataclasses.asdict(cfg),
         "windows": choice.windows,
         "positives": choice.positives,
@@ -358,8 +398,19 @@ def run(
     if set(models) != set(MODELS) or len(models) != len(MODELS):
         raise TuneInputError(f"both models are needed to write the config: {list(MODELS)}")
     inputs = {m: load_model_inputs(data_dir, m, expect_videos) for m in models}
-    choices = {m: tune_model(*inputs[m]) for m in models}
-    rows = [results_row(m, choices[m], int(inputs[m][1]["video"].nunique())) for m in models]
+    both = {m: tune_model(*inputs[m]) for m in models}
+    choices = {m: both[m][1] for m in models}
+    overlapped = {m: count_overlapped(inputs[m][0]) for m in models}
+    for m in models:
+        sys.stdout.write(f"{m}: overlapped rows (area > 0, no box) = {overlapped[m]}\n")
+    rows = [
+        results_row(m, choice, int(inputs[m][1]["video"].nunique()), overlapped[m], sel, frozen)
+        for m in models
+        for choice, sel, frozen in (
+            (both[m][0], SELECTION_PROTOCOL, False),
+            (both[m][1], SELECTION_CAPPED, True),
+        )
+    ]
     _atomic(config_out, config_text(choices))
     _atomic(results_out, pd.DataFrame(rows).to_csv(index=False))
     return rows
@@ -384,7 +435,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     for row in rows:
         sys.stdout.write(
-            f"{row['model']}: windows={row['windows']} positives={row['positives']} "
+            f"{row['model']} {row['selection']}: windows={row['windows']} "
+            f"positives={row['positives']} "
             f"flagged={row['flagged']} precision={row['precision']:.3f} "
             f"recall={row['recall']:.3f} f1={row['f1']:.3f}\n"
         )
