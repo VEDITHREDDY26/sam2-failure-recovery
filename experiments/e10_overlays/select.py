@@ -3,7 +3,8 @@
     python -m experiments.e10_overlays.select [--results-dir results] [--splits davis_val sav_test]
         [--alone sam2_tiny] [--fix fix_rules_csrt_tiny] [--out results/e10_selection.csv]
 
-Rule (fixed before any result existed): per test set, from per-video J&F deltas (fix - SAM 2 alone): the two
+Rule (fixed before any result existed): per test set, from per-video J&F deltas
+(fix - SAM 2 alone): the two
 most improved (delta >= 0.001), the two most worsened (delta <= -0.001; fewer if fewer exist) and
 the video nearest the median delta among the others; ties by video name. The frame is the first
 "reprompted" event of the fix run, the middle frame of the video if there is none. Every selected
