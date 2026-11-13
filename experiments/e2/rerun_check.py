@@ -4,7 +4,7 @@
 
 Compares results/fix_rules_csrt_tiny_davis_val.csv (the E2 run) with
 results/fix_rerun_rules_csrt_tiny_davis_val.csv (the rerun, scored with experiments.e2.score
---videos) on the five videos fixed in docs/decisions.md before any run, and the re-prompt counts
+--videos) on the five videos fixed before any run, and the re-prompt counts
 from the two events files. Tolerance (also fixed beforehand): per video |delta J&F| <= 0.01 and the
 same number of re-prompts; mean |delta J&F| over the videos <= 0.005. Exit status 1 if anything is
 outside; the task document then explains each difference.
