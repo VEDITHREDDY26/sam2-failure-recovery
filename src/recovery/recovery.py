@@ -2,7 +2,7 @@
 
 SAM 2 is propagated frame by frame. At each frame the detector looks at every object; a flagged
 object gets a box from the box source, the box passes the sanity check, and SAM 2 is re-prompted
-at that frame on a fresh inference state (docs/interfaces.md section 6): the initial prompts and
+at that frame on a fresh inference state (the re-prompt contract): the initial prompts and
 earlier recovery boxes are added again, frames before t are re-propagated and their outputs are
 discarded (they were already emitted and stay as they were), the new boxes are added at t and
 propagation continues from t. Objects accepted at the same frame share one restart.
