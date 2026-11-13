@@ -1,4 +1,4 @@
-"""Tune the rule-detector thresholds on SA-V val only (protocol in docs/decisions.md).
+"""Tune the rule-detector thresholds on SA-V val only (protocol fixed before any label was read).
 
     python -m experiments.tune_rules.tune --models tiny large [--data-dir DIR]
         [--config-out configs/detector/rules.yaml] [--results-out results/rules_sav_val.csv]
