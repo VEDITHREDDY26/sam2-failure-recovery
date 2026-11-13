@@ -1,0 +1,4 @@
+kind: recovery_run
+method: fix_oracle_flags_oracle_box_tiny
+detector: oracle
+box_source: oracle
