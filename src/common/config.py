@@ -133,12 +133,20 @@ def _build(cls: type[T], raw: Any, where: str) -> T:
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: expected a mapping, got {type(raw).__name__}")
     hints = typing.get_type_hints(cls)
-    names = {f.name for f in dataclasses.fields(cls)}  # type: ignore[arg-type]
+    fields = dataclasses.fields(cls)  # type: ignore[arg-type]
+    names = {f.name for f in fields}
+    optional = {
+        f.name
+        for f in fields
+        if f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
+    }
     for key in raw:
         if key not in names:
             raise ConfigError(f"{where}: unknown key '{key}'")
     values: dict[str, Any] = {}
     for name in names:
+        if name not in raw and name in optional:
+            continue
         if name not in raw:
             raise ConfigError(f"{where}: missing required key '{name}'")
         values[name] = _convert(raw[name], hints[name], f"{where}.{name}")

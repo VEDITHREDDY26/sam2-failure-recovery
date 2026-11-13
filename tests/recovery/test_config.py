@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from src.common.config import ConfigError
-from src.recovery.config import RecoveryRunConfig, load_recovery_config
+from src.recovery.config import RULE_NAMES, RecoveryRunConfig, load_recovery_config
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
@@ -14,7 +14,7 @@ SHIPPED = sorted(
 
 
 def test_shipped_configs_exist() -> None:
-    assert len(SHIPPED) == 6
+    assert len(SHIPPED) == 7
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)
@@ -59,3 +59,33 @@ def test_yaml_with_oracle_flags_in_real_method_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigError):
         load_recovery_config(path)
+
+
+def test_continuous_config_sets_the_tracker_mode() -> None:
+    cfg = load_recovery_config(ROOT / "configs" / "recovery" / "rules_csrt_continuous_tiny.yaml")
+    assert cfg.tracker_mode == "continuous" and cfg.enabled_rules == RULE_NAMES
+
+
+def test_plain_config_leaves_the_fixed_settings() -> None:
+    cfg = load_recovery_config(ROOT / "configs" / "recovery" / "rules_csrt_tiny.yaml")
+    assert cfg.tracker_mode == "" and cfg.disabled_rules == []
+
+
+def test_name_must_say_continuous_iff_tracker_mode_is() -> None:
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_rules_csrt_tiny", "rules", "csrt", tracker_mode="continuous")
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_continuous_rules_csrt_tiny", "rules", "csrt")
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_continuous_x_tiny", "rules", "csrt", tracker_mode="sideways")
+
+
+def test_name_must_say_which_rule_is_off() -> None:
+    cfg = RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt", disabled_rules=["low_score"])
+    assert "low_score" not in cfg.enabled_rules and len(cfg.enabled_rules) == 3
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_tiny", "rules", "csrt", disabled_rules=["low_score"])
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt")
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig("fix_no_bogus_tiny", "rules", "csrt", disabled_rules=["bogus"])

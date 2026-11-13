@@ -62,3 +62,27 @@ def test_real_system_runs_end_to_end_with_a_fake_predictor(
     assert signals_path(out, "fix_rules_csrt_tiny", SPLIT, VIDEO).is_file()
     events = pd.read_csv(events_path(out, "fix_rules_csrt_tiny", SPLIT, VIDEO))
     assert list(events.columns) == list(EVENT_COLUMNS) and events.empty
+
+
+def test_continuous_variant_runs_with_the_tracker_mode_of_its_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = write_prompts(tmp_path, monkeypatch)
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(f"kind: rules\ntiny: {QUIET}\nlarge: {QUIET}\n")
+    seen: list[str] = []
+    real = run_online.CSRTBoxSource
+
+    def spy(mode: str) -> object:
+        seen.append(mode)
+        return real(mode)
+
+    monkeypatch.setattr(run_online, "build_predictor", lambda *a, **k: StatefulFake())
+    monkeypatch.setattr(run_online, "DEFAULT_RULES_PATH", rules)
+    monkeypatch.setattr(run_online, "CSRTBoxSource", spy)
+    run_online.main(
+        ["--config", "configs/recovery/rules_csrt_continuous_tiny.yaml", "--prompts", str(prompts)]
+    )
+    assert seen == ["continuous"]
+    out = tmp_path / "drive" / "outputs"
+    assert signals_path(out, "fix_continuous_rules_csrt_tiny", SPLIT, VIDEO).is_file()

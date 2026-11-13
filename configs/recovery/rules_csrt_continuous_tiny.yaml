@@ -1,0 +1,5 @@
+kind: recovery_run
+method: fix_continuous_rules_csrt_tiny
+detector: rules
+box_source: csrt
+tracker_mode: continuous
