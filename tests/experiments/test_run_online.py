@@ -43,17 +43,9 @@ def test_missing_rules_file_stops_before_anything_runs(
 ) -> None:
     prompts = write_prompts(tmp_path, monkeypatch)
     monkeypatch.setattr(run_online, "build_predictor", lambda *a, **k: pytest.fail("built"))
+    monkeypatch.setattr(run_online, "DEFAULT_RULES_PATH", tmp_path / "no.yaml")
     with pytest.raises(SystemExit, match="detector not frozen yet"):
-        run_online.main(
-            [
-                "--config",
-                REAL_CONFIG,
-                "--prompts",
-                str(prompts),
-                "--rules",
-                str(tmp_path / "no.yaml"),
-            ]
-        )
+        run_online.main(["--config", REAL_CONFIG, "--prompts", str(prompts)])
     assert not (tmp_path / "drive" / "outputs").exists()
 
 
@@ -64,7 +56,8 @@ def test_real_system_runs_end_to_end_with_a_fake_predictor(
     rules = tmp_path / "rules.yaml"
     rules.write_text(f"kind: rules\ntiny: {QUIET}\nlarge: {QUIET}\n")
     monkeypatch.setattr(run_online, "build_predictor", lambda *a, **k: StatefulFake())
-    run_online.main(["--config", REAL_CONFIG, "--prompts", str(prompts), "--rules", str(rules)])
+    monkeypatch.setattr(run_online, "DEFAULT_RULES_PATH", rules)
+    run_online.main(["--config", REAL_CONFIG, "--prompts", str(prompts)])
     out = tmp_path / "drive" / "outputs"
     assert signals_path(out, "fix_rules_csrt_tiny", SPLIT, VIDEO).is_file()
     events = pd.read_csv(events_path(out, "fix_rules_csrt_tiny", SPLIT, VIDEO))

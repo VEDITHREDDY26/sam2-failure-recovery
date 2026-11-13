@@ -42,8 +42,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--videos", nargs="+", default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--offload-video", action="store_true")
-    parser.add_argument("--rules", type=Path, default=DEFAULT_RULES_PATH)
-    parser.add_argument("--settings", type=Path, default=CONFIG_PATH)
     args = parser.parse_args(argv)
     run_cfg = load_recovery_config(args.config)
     if run_cfg.detector != "rules" or run_cfg.box_source != "csrt":
@@ -52,12 +50,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             "have their own entry script"
         )
     check_online_method(run_cfg.method)
-    if not args.rules.is_file():
-        raise SystemExit(f"detector not frozen yet: {args.rules} does not exist")
+    if not DEFAULT_RULES_PATH.is_file():
+        raise SystemExit(f"detector not frozen yet: {DEFAULT_RULES_PATH} does not exist")
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     model = model_of(run_cfg)
-    settings = load_recovery_settings(args.settings)
+    settings = load_recovery_settings(CONFIG_PATH)
     data = load_data_config()
     prompts = load_batch_prompts(args.prompts)
     run_batch(
@@ -65,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         data,
         run_cfg.method,
         lambda: build_predictor(model, data.data_root, device=args.device),
-        lambda video: OnlineRuleDetector.from_config(model, args.rules),
+        lambda video: OnlineRuleDetector.from_config(model, DEFAULT_RULES_PATH),
         lambda video: CSRTBoxSource(settings.tracker_mode),
         BoxCheck(load_box_check_config()),
         settings,
