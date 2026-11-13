@@ -15,6 +15,7 @@ from tests.experiments.e2_trees import (
 )
 
 CONFIG = "configs/recovery/rules_csrt_tiny.yaml"
+EXTRA = 'tracker_mode: ""\ndisabled_rules: []\n'
 
 
 @pytest.fixture
@@ -108,7 +109,9 @@ def test_sam2_and_baseline_output_names_are_refused(method: str) -> None:
 def test_sam2_config_is_refused(world: tuple[Path, Path], tmp_path: Path) -> None:
     _, subset = world
     config = tmp_path / "sam2_tiny.yaml"
-    config.write_text("kind: recovery_run\nmethod: sam2_tiny\ndetector: rules\nbox_source: csrt\n")
+    config.write_text(
+        "kind: recovery_run\nmethod: sam2_tiny\ndetector: rules\nbox_source: csrt\n" + EXTRA
+    )
     with pytest.raises(ValueError, match="SAM 2 alone"):
         _score(subset, tmp_path / "results", config=str(config))
 

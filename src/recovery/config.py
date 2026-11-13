@@ -26,8 +26,8 @@ class RecoveryRunConfig:
     method: str
     detector: str
     box_source: str
-    tracker_mode: str = ""
-    disabled_rules: list[str] = dataclasses.field(default_factory=list)
+    tracker_mode: str
+    disabled_rules: list[str]
 
     def __post_init__(self) -> None:
         try:

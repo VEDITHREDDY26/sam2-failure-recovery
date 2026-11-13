@@ -5,6 +5,8 @@ import pytest
 from src.common.config import ConfigError
 from src.recovery.config import RULE_NAMES, RecoveryRunConfig, load_recovery_config
 
+EXTRA = 'tracker_mode: ""\ndisabled_rules: []\n'
+
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
     p
@@ -30,17 +32,35 @@ def test_real_system_config_is_not_oracle() -> None:
 
 def test_real_system_with_oracle_flags_raises() -> None:
     with pytest.raises(ConfigError):
-        RecoveryRunConfig(method="fix_rules_csrt_tiny", detector="oracle", box_source="csrt")
+        RecoveryRunConfig(
+            method="fix_rules_csrt_tiny",
+            detector="oracle",
+            box_source="csrt",
+            tracker_mode="",
+            disabled_rules=[],
+        )
 
 
 def test_real_system_with_oracle_box_raises() -> None:
     with pytest.raises(ConfigError):
-        RecoveryRunConfig(method="fix_rules_csrt_tiny", detector="rules", box_source="oracle")
+        RecoveryRunConfig(
+            method="fix_rules_csrt_tiny",
+            detector="rules",
+            box_source="oracle",
+            tracker_mode="",
+            disabled_rules=[],
+        )
 
 
 def test_oracle_name_without_oracle_piece_raises() -> None:
     with pytest.raises(ConfigError):
-        RecoveryRunConfig(method="fix_oracle_tiny", detector="rules", box_source="csrt")
+        RecoveryRunConfig(
+            method="fix_oracle_tiny",
+            detector="rules",
+            box_source="csrt",
+            tracker_mode="",
+            disabled_rules=[],
+        )
 
 
 @pytest.mark.parametrize(
@@ -49,13 +69,16 @@ def test_oracle_name_without_oracle_piece_raises() -> None:
 )
 def test_unknown_values_raise(method: str, detector: str, box: str) -> None:
     with pytest.raises(ConfigError):
-        RecoveryRunConfig(method=method, detector=detector, box_source=box)
+        RecoveryRunConfig(
+            method=method, detector=detector, box_source=box, tracker_mode="", disabled_rules=[]
+        )
 
 
 def test_yaml_with_oracle_flags_in_real_method_raises(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text(
         "kind: recovery_run\nmethod: fix_rules_csrt_tiny\ndetector: oracle\nbox_source: csrt\n"
+        + EXTRA
     )
     with pytest.raises(ConfigError):
         load_recovery_config(path)
@@ -73,19 +96,19 @@ def test_plain_config_leaves_the_fixed_settings() -> None:
 
 def test_name_must_say_continuous_iff_tracker_mode_is() -> None:
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_rules_csrt_tiny", "rules", "csrt", tracker_mode="continuous")
+        RecoveryRunConfig("fix_rules_csrt_tiny", "rules", "csrt", "continuous", [])
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_continuous_rules_csrt_tiny", "rules", "csrt")
+        RecoveryRunConfig("fix_continuous_rules_csrt_tiny", "rules", "csrt", "", [])
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_continuous_x_tiny", "rules", "csrt", tracker_mode="sideways")
+        RecoveryRunConfig("fix_continuous_x_tiny", "rules", "csrt", "sideways", [])
 
 
 def test_name_must_say_which_rule_is_off() -> None:
-    cfg = RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt", disabled_rules=["low_score"])
+    cfg = RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt", "", ["low_score"])
     assert "low_score" not in cfg.enabled_rules and len(cfg.enabled_rules) == 3
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_tiny", "rules", "csrt", disabled_rules=["low_score"])
+        RecoveryRunConfig("fix_tiny", "rules", "csrt", "", ["low_score"])
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt")
+        RecoveryRunConfig("fix_no_low_score_tiny", "rules", "csrt", "", [])
     with pytest.raises(ConfigError):
-        RecoveryRunConfig("fix_no_bogus_tiny", "rules", "csrt", disabled_rules=["bogus"])
+        RecoveryRunConfig("fix_no_bogus_tiny", "rules", "csrt", "", ["bogus"])

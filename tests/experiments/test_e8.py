@@ -9,6 +9,8 @@ from src.recovery.events import EVENT_COLUMNS
 from tests.eval.sam2_trees import build_world, run_all
 from tests.experiments.e2_trees import blank_object, make_online_run, write_events
 
+EXTRA = 'tracker_mode: ""\ndisabled_rules: []\n'
+
 CONFIG = "configs/recovery/rules_csrt_tiny.yaml"
 CONTINUOUS = "configs/recovery/rules_csrt_continuous_tiny.yaml"
 METHOD = "fix_rules_csrt_tiny"
@@ -61,7 +63,9 @@ def test_sav_val_is_refused(world: tuple[Path, Path], tmp_path: Path) -> None:
 def test_alone_method_is_refused(world: tuple[Path, Path], tmp_path: Path) -> None:
     _, subset = world
     config = tmp_path / "sam2_tiny.yaml"
-    config.write_text("kind: recovery_run\nmethod: sam2_tiny\ndetector: rules\nbox_source: csrt\n")
+    config.write_text(
+        "kind: recovery_run\nmethod: sam2_tiny\ndetector: rules\nbox_source: csrt\n" + EXTRA
+    )
     with pytest.raises(ValueError, match="SAM 2 alone"):
         run_helper(subset, tmp_path / "results", config=str(config))
 

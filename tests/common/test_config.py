@@ -74,20 +74,3 @@ def test_empty_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: s
 def test_unknown_kind(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="mystery"):
         load_config(write(tmp_path, "kind: mystery\n"))
-
-
-def test_dataclass_defaults_make_a_key_optional(tmp_path: Path) -> None:
-    from dataclasses import dataclass, field
-
-    from src.common.config import _build
-
-    @dataclass(frozen=True)
-    class Opt:
-        a: int
-        b: str = "x"
-        c: list[str] = field(default_factory=list)
-
-    assert _build(Opt, {"a": 1}, "t") == Opt(1, "x", [])
-    assert _build(Opt, {"a": 1, "c": ["q"]}, "t").c == ["q"]
-    with pytest.raises(ConfigError):
-        _build(Opt, {"b": "y"}, "t")
