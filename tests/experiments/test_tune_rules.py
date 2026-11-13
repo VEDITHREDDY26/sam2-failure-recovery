@@ -14,20 +14,26 @@ BOX_COLUMNS = ["box_x0", "box_y0", "box_x1", "box_y1"]
 
 
 def make_video(
-    name: str, objects: dict[int, tuple[int, int]], seed: int
+    name: str, objects: dict[int, tuple[int, int]], seed: int, calm: bool = False
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Signals, boxes, labels for one video; objects = {id: (prompt frame, last frame)}.
 
     Labels sit on every 4th frame from the prompt frame on (the prompt frame included).
+    calm = steady score, area and position, so a few frames can be the only flagged ones.
     """
     rng = np.random.default_rng(seed)
     sig_rows, box_rows, label_rows = [], [], []
     for obj, (start, stop) in objects.items():
         for f in range(start, stop + 1):
-            empty = rng.random() < 0.15
+            empty = False if calm else rng.random() < 0.15
             area = 0 if empty else int(rng.integers(50, 3000))
             cx, cy = (np.nan, np.nan) if empty else (rng.uniform(5, W - 5), rng.uniform(5, H - 5))
-            sig_rows.append((name, obj, f, rng.normal(0, 4), area, cx, cy, int(empty)))
+            score = rng.normal(0, 4)
+            if calm:
+                area, cx, cy, score = 1000 + int(rng.integers(0, 20)), W / 2, H / 2, 5.0
+                if rng.random() < 0.02:
+                    score = -20.0
+            sig_rows.append((name, obj, f, score, area, cx, cy, int(empty)))
             if empty:
                 box = (None,) * 4
             else:
@@ -53,10 +59,12 @@ def make_video(
     return signals, boxes, labels
 
 
-def write_world(root: Path, n_videos: int, models: tuple[str, ...] = ("tiny", "large")) -> Path:
+def write_world(
+    root: Path, n_videos: int, models: tuple[str, ...] = ("tiny", "large"), calm: bool = True
+) -> Path:
     for m_index, model in enumerate(models):
         parts = [
-            make_video(f"vid{i}", {1: (0, 40), 2: (2, 33)}, seed=100 * m_index + i)
+            make_video(f"vid{i}", {1: (0, 40), 2: (2, 33)}, seed=100 * m_index + i, calm=calm)
             for i in range(n_videos)
         ]
         folder = root / "signals" / f"sam2_{model}" / "sav_val" / "signals"
@@ -183,6 +191,46 @@ def test_search_ties_fewer_flagged_then_earlier_grid_point() -> None:
     assert point == (6, 0, 0, 0, 0)
 
 
+def test_flag_cap_excludes_points_over_the_budget() -> None:
+    truth = np.array([True] * 4 + [False] * 6)
+    low, area, move, gone = _vectors(10)
+    area[2] = np.array([True, True] + [False] * 8)  # flags 2, tp 2: F1 2/3
+    point, flagged, tp = tune.search(low, area, move, gone, truth)
+    assert point == (0, 2, 0, 0, 0) and (flagged, tp) == (2, 2)
+    low[3] = np.array([True] * 4 + [False] * 6)  # perfect, flags 4 of 10
+    point, flagged, tp = tune.search(low, area, move, gone, truth)
+    assert point == (3, 0, 0, 0, 0) and (flagged, tp) == (4, 4)
+    point, flagged, tp = tune.search(low, area, move, gone, truth, max_flag_rate=0.2)
+    assert point == (0, 2, 0, 0, 0) and (flagged, tp) == (2, 2)
+    point, _, _ = tune.search(low, area, move, gone, truth, max_flag_rate=0.4)
+    assert point == (3, 0, 0, 0, 0)
+
+
+def test_flag_cap_keeps_the_tie_break() -> None:
+    truth = np.array([True, True, False, False, False, False, False, False, False, False])
+    low, area, move, gone = _vectors(10)
+    one = np.array([True] + [False] * 9)
+    low[6] = one
+    low[2] = one
+    low[9] = np.array([True, True, True] + [False] * 7)  # tp 2, flagged 3: F1 0.8
+    low[8] = np.array([True, True] + [False] * 8)  # tp 2, flagged 2: F1 1.0, flags 20%
+    point, _, _ = tune.search(low, area, move, gone, truth, max_flag_rate=0.2)
+    assert point == (8, 0, 0, 0, 0)
+    low[8] = np.array([True, False, True] + [False] * 7)  # tp 1 flagged 2: F1 0.5
+    low[7] = np.array([True, False, False, True] + [False] * 6)  # tp 1, flagged 2
+    point, flagged, _ = tune.search(low, area, move, gone, truth, max_flag_rate=0.2)
+    assert flagged == 1 and point == (2, 0, 0, 0, 0)
+
+
+def test_flag_cap_with_no_eligible_point_raises() -> None:
+    truth = np.array([True, False])
+    low, area, move, gone = _vectors(2)
+    for vector in (*low, *area, *move, *gone):
+        vector[:] = True
+    with pytest.raises(tune.TuneInputError, match="no grid point"):
+        tune.search(low, area, move, gone, truth, max_flag_rate=0.4)
+
+
 def test_disappearance_grid_index_maps_to_fraction_and_border() -> None:
     truth = np.array([True, False])
     low, area, move, gone = _vectors(2)
@@ -201,8 +249,9 @@ def test_streaming_detector_reproduces_the_searched_window_flags() -> None:
         pd.concat([p[1] for p in parts], ignore_index=True),
     )
     labels = pd.concat([p[2] for p in parts], ignore_index=True)
-    choice = tune.tune_model(table, labels)
     windows = tune.build_windows(table, labels)
+    protocol = tune.search(*tune.rule_vectors(table, windows), windows.truth)
+    choice = tune._choice_at(table, windows, *protocol)
     stream = np.zeros(len(table), dtype=bool)
     fired = {name: np.zeros(len(table), dtype=bool) for name in ALL_RULES}
     for _, rows in table.groupby(["video", "object_id"], sort=False):
@@ -230,14 +279,19 @@ def test_end_to_end_writes_loadable_config_and_results(tmp_path: Path, capsys) -
     root = write_world(tmp_path / "data", 3)
     assert _run(root, tmp_path, "--expect-videos", "3") == 0
     results = pd.read_csv(tmp_path / "out" / "rules_sav_val.csv")
-    assert results["model"].tolist() == ["tiny", "large"]
+    assert results["model"].tolist() == ["tiny", "tiny", "large", "large"]
+    assert results["selection"].tolist() == ["f1_protocol", "f1_flag_cap_0.10"] * 2
+    assert results["frozen"].tolist() == [False, True, False, True]
+    capped = results[results["frozen"]]
+    assert (capped["flagged"] <= 0.10 * capped["windows"]).all()
     assert (results["split"] == "sav_val").all()
     for column in ("precision", "recall", "f1", "tp", "fires_low_score", "tp_disappearance"):
         assert column in results.columns
     assert (results["videos"] == 3).all()
+    assert (results["overlapped_rows"] == 0).all()
     for model in ("tiny", "large"):
         cfg = load_rules_config(model, tmp_path / "out" / "rules.yaml")
-        row = results[results["model"] == model].iloc[0]
+        row = capped[capped["model"] == model].iloc[0]
         assert cfg.score_threshold == row["score_threshold"]
         assert cfg.border_margin_px == row["border_margin_px"]
     assert "precision=" in capsys.readouterr().out
@@ -285,3 +339,35 @@ def test_needs_both_models(tmp_path: Path) -> None:
     root = write_world(tmp_path / "data", 3)
     assert _run(root, tmp_path, "--models", "tiny", "--expect-videos", "3") == 1
     assert not (tmp_path / "out").exists()
+
+
+def test_overlapped_rows_are_accepted_and_counted(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    root = write_world(tmp_path / "data", 3)
+    path = root / "boxes_tiny_sav_val.csv"
+    boxes = pd.read_csv(path, dtype={"video": str})
+    hide = boxes[BOX_COLUMNS[0]].notna().to_numpy().nonzero()[0][[3, 20, 40]]
+    boxes.loc[boxes.index[hide], BOX_COLUMNS] = np.nan
+    boxes.to_csv(path, index=False)
+    assert _run(root, tmp_path, "--expect-videos", "3") == 0
+    results = pd.read_csv(tmp_path / "out" / "rules_sav_val.csv")
+    assert results.drop_duplicates("model").set_index("model")["overlapped_rows"].to_dict() == {
+        "tiny": 3,
+        "large": 0,
+    }
+    assert "overlapped rows" in capsys.readouterr().out
+
+
+def test_config_holds_only_the_capped_thresholds(tmp_path: Path) -> None:
+    root = write_world(tmp_path / "data", 3)
+    assert _run(root, tmp_path, "--expect-videos", "3") == 0
+    results = pd.read_csv(tmp_path / "out" / "rules_sav_val.csv")
+    capped = results[results["selection"] == "f1_flag_cap_0.10"]
+    protocol = results[results["selection"] == "f1_protocol"]
+    assert capped["frozen"].all() and not protocol["frozen"].any()
+    for model in ("tiny", "large"):
+        cfg = load_rules_config(model, tmp_path / "out" / "rules.yaml")
+        row = capped[capped["model"] == model].iloc[0]
+        assert (cfg.score_threshold, cfg.area_ratio, cfg.jump_ratio) == (
+            row["score_threshold"], row["area_ratio"], row["jump_ratio"]
+        )  # fmt: skip
+        assert row["flagged"] <= tune.FROZEN_MAX_FLAG_RATE * row["windows"]
