@@ -19,6 +19,7 @@ from src.detection.rules import (
     RuleDetector,
     RulesConfig,
     RuleThresholds,
+    batch_evidence,
     batch_flags,
     evidence,
     fired_rules,
@@ -262,3 +263,47 @@ def test_config_is_frozen() -> None:
     cfg = RulesConfig(tiny=CFG, large=CFG)
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.tiny = CFG  # type: ignore[misc]
+
+
+def _rect() -> np.ndarray:
+    m = np.zeros((30, 40), dtype=bool)
+    m[5:15, 5:15] = True
+    return m
+
+
+def test_overlapped_frame_never_fires_disappearance_and_batch_equals_streaming() -> None:
+    cfg = RuleThresholds(-100.0, 1000.0, 1000.0, 0.01, 0.0)
+    masks = [_rect()] * 3 + [np.zeros((30, 40), dtype=bool)] * 2
+    sig = signals_from_masks("v", 0, masks, [1.0] * 5)
+    rows = []
+    for i, m in enumerate(masks):
+        ys, xs = np.nonzero(m)
+        c = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1) if ys.size else (None,) * 4
+        rows.append(("v", 0, i, *m.shape, *c))
+    b = pd.DataFrame(rows, columns=list(BOX_COLUMNS)).astype({c: "Int64" for c in BOX_COLUMNS[3:]})
+    plain = join_signals_boxes(sig, b)
+    assert list(batch_flags(plain, cfg)["flag"]) == [False, False, False, True, False]
+    hidden = b.copy()
+    hidden.loc[2, list(BOX_COLUMNS[5:])] = pd.NA
+    table = join_signals_boxes(sig, hidden, allow_overlapped=True)
+    batch = batch_flags(table, cfg)
+    assert list(batch["flag"]) == [False] * 5
+    assert list(batch["flag"]) == _stream(table, cfg)
+    ev = batch_evidence(table)
+    assert np.isnan(ev.loc[3, "prev_margin"]) and ev.loc[3, "prev_area_fraction"] > 0
+
+
+def test_overlapped_frame_leaves_other_rules_unchanged() -> None:
+    cfg = RuleThresholds(-0.3, 1.5, 0.3, 0.02, 3.0)
+    table = _table(4)
+    sig = table[
+        ["video", "object_id", "frame_index", "object_score", "area", "centre_x", "centre_y"]
+    ]
+    boxes = table[["video", "object_id", "frame_index", "height", "width", *BOX_COLUMNS[5:]]].copy()
+    hide = (table["area"] > 0).to_numpy().nonzero()[0][::3]
+    boxes.loc[boxes.index[hide], list(BOX_COLUMNS[5:])] = np.nan
+    other = join_signals_boxes(sig, boxes, allow_overlapped=True)
+    a, c = batch_flags(table, cfg), batch_flags(other, cfg)
+    for rule in (LOW_SCORE, AREA_CHANGE, CENTRE_JUMP):
+        assert list(a[rule]) == list(c[rule])
+    assert list(c["flag"]) == _stream(other, cfg)

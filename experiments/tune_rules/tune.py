@@ -41,7 +41,7 @@ from src.detection.rules import (
     RuleThresholds,
     batch_evidence,
 )
-from src.detection.signals import join_signals_boxes
+from src.detection.signals import count_overlapped, join_signals_boxes
 
 SPLIT = "sav_val"
 EXPECTED_VIDEOS = 155
@@ -308,15 +308,18 @@ def load_model_inputs(
     if len(files) != expect_videos:
         raise TuneInputError(f"{model}: {len(files)} videos, expected {expect_videos}")
     signals = pd.concat([read_signals(p) for p in files.values()], ignore_index=True)
-    return join_signals_boxes(signals, boxes), labels
+    return join_signals_boxes(signals, boxes, allow_overlapped=True), labels
 
 
-def results_row(model: str, choice: Choice, videos: int) -> dict[str, object]:
+def results_row(
+    model: str, choice: Choice, videos: int, overlapped_rows: int = 0
+) -> dict[str, object]:
     cfg = choice.thresholds
     row: dict[str, object] = {
         "model": model,
         "split": SPLIT,
         "videos": videos,
+        "overlapped_rows": overlapped_rows,
         **dataclasses.asdict(cfg),
         "windows": choice.windows,
         "positives": choice.positives,
@@ -359,7 +362,13 @@ def run(
         raise TuneInputError(f"both models are needed to write the config: {list(MODELS)}")
     inputs = {m: load_model_inputs(data_dir, m, expect_videos) for m in models}
     choices = {m: tune_model(*inputs[m]) for m in models}
-    rows = [results_row(m, choices[m], int(inputs[m][1]["video"].nunique())) for m in models]
+    overlapped = {m: count_overlapped(inputs[m][0]) for m in models}
+    for m in models:
+        sys.stdout.write(f"{m}: overlapped rows (area > 0, no box) = {overlapped[m]}\n")
+    rows = [
+        results_row(m, choices[m], int(inputs[m][1]["video"].nunique()), overlapped[m])
+        for m in models
+    ]
     _atomic(config_out, config_text(choices))
     _atomic(results_out, pd.DataFrame(rows).to_csv(index=False))
     return rows

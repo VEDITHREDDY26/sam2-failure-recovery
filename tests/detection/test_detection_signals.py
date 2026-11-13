@@ -7,7 +7,13 @@ import pytest
 from experiments.tune_rules.export_sav_val import BOX_COLUMNS
 from src.common.boxes import Box
 from src.common.signals import signals_from_masks
-from src.detection.signals import FrameObs, join_signals_boxes, obs_from_mask, obs_from_row
+from src.detection.signals import (
+    FrameObs,
+    count_overlapped,
+    join_signals_boxes,
+    obs_from_mask,
+    obs_from_row,
+)
 
 
 def _mask(x0: int, y0: int, x1: int, y1: int, h: int = 12, w: int = 20) -> np.ndarray:
@@ -90,3 +96,35 @@ def test_join_refuses_gaps() -> None:
     sig, boxes = _tables([_mask(1, 1, 5, 4)] * 3, [1.0, 1.0, 1.0])
     with pytest.raises(ValueError, match="consecutive"):
         join_signals_boxes(sig, boxes.iloc[[0, 2]])
+
+
+def _overlapped_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    sig, boxes = _tables([_mask(1, 1, 5, 4)] * 3, [1.0, 1.0, 1.0])
+    boxes.loc[1, list(BOX_COLUMNS[5:])] = pd.NA
+    return sig, boxes
+
+
+def test_overlapped_refused_by_default_and_accepted_on_request() -> None:
+    sig, boxes = _overlapped_tables()
+    with pytest.raises(ValueError, match="non-zero"):
+        join_signals_boxes(sig, boxes)
+    table = join_signals_boxes(sig, boxes, allow_overlapped=True)
+    assert count_overlapped(table) == 1
+    obs = obs_from_row(table.iloc[1])
+    assert obs.area == 12 and obs.box is None and obs.box_unknown
+    assert not obs_from_row(table.iloc[0]).box_unknown
+
+
+def test_overlapped_option_still_refuses_other_mismatches() -> None:
+    sig, boxes = _tables([_mask(1, 1, 5, 4), _mask(0, 0, 0, 0), _mask(1, 1, 5, 4)], [1] * 3)
+    full = boxes.copy()
+    full.loc[1, list(BOX_COLUMNS[5:])] = [1, 1, 5, 4]
+    with pytest.raises(ValueError, match="non-zero"):
+        join_signals_boxes(sig, full, allow_overlapped=True)
+    partial = boxes.copy()
+    partial.loc[0, BOX_COLUMNS[5]] = pd.NA
+    with pytest.raises(ValueError, match="partly"):
+        join_signals_boxes(sig, partial, allow_overlapped=True)
+    with pytest.raises(ValueError, match="consecutive"):
+        join_signals_boxes(sig, boxes.iloc[[0, 2]], allow_overlapped=True)
+    assert count_overlapped(join_signals_boxes(sig, boxes, allow_overlapped=True)) == 0

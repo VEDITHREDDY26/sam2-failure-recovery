@@ -235,6 +235,7 @@ def test_end_to_end_writes_loadable_config_and_results(tmp_path: Path, capsys) -
     for column in ("precision", "recall", "f1", "tp", "fires_low_score", "tp_disappearance"):
         assert column in results.columns
     assert (results["videos"] == 3).all()
+    assert (results["overlapped_rows"] == 0).all()
     for model in ("tiny", "large"):
         cfg = load_rules_config(model, tmp_path / "out" / "rules.yaml")
         row = results[results["model"] == model].iloc[0]
@@ -285,3 +286,16 @@ def test_needs_both_models(tmp_path: Path) -> None:
     root = write_world(tmp_path / "data", 3)
     assert _run(root, tmp_path, "--models", "tiny", "--expect-videos", "3") == 1
     assert not (tmp_path / "out").exists()
+
+
+def test_overlapped_rows_are_accepted_and_counted(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    root = write_world(tmp_path / "data", 3)
+    path = root / "boxes_tiny_sav_val.csv"
+    boxes = pd.read_csv(path, dtype={"video": str})
+    hide = boxes[BOX_COLUMNS[0]].notna().to_numpy().nonzero()[0][[3, 20, 40]]
+    boxes.loc[boxes.index[hide], BOX_COLUMNS] = np.nan
+    boxes.to_csv(path, index=False)
+    assert _run(root, tmp_path, "--expect-videos", "3") == 0
+    results = pd.read_csv(tmp_path / "out" / "rules_sav_val.csv")
+    assert results.set_index("model")["overlapped_rows"].to_dict() == {"tiny": 3, "large": 0}
+    assert "overlapped rows" in capsys.readouterr().out
