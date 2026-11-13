@@ -126,7 +126,7 @@ class LearnedModel:
 
     def probabilities(self, features: FloatArray) -> FloatArray:
         z = (features - np.array(self.mean)) / np.array(self.std)
-        logit = z @ np.array(self.coef) + self.intercept
+        logit = (z * np.array(self.coef)).sum(axis=1) + self.intercept
         return np.asarray(1.0 / (1.0 + np.exp(-logit)), dtype=np.float64)
 
     def table_probabilities(self, table: pd.DataFrame) -> FloatArray:
