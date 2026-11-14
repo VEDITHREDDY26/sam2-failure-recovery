@@ -18,7 +18,7 @@ import numpy.typing as npt
 from src.common.boxes import Box, box_from_mask, clip, from_xywh, to_xywh
 
 Status = Literal["ok", "lost", "not_initialised"]
-ReinitStatus = Literal["reinitialised", "empty_mask"]
+ReinitStatus = Literal["reinitialised", "empty_mask", "init_failed"]
 
 
 @dataclass(frozen=True)
@@ -47,13 +47,21 @@ class AlignedCSRT:
     def reinit(
         self, frame_bgr: npt.NDArray[np.uint8], mask: npt.NDArray[np.bool_], frame_idx: int
     ) -> ReinitStatus:
-        """CSRT restarts on the tight box of a reliable mask; an empty mask keeps the old state."""
+        """CSRT restarts on the tight box of a reliable mask.
+
+        An empty mask keeps the old state. So does a box CSRT cannot start on: OpenCV's CSRT
+        raises on boxes one pixel wide or tall (and on some two-pixel boxes at the image corner),
+        which a thin sliver of SAM 2 mask can produce.
+        """
         _check_frame(frame_bgr)
         box = box_from_mask(mask)
         if box is None:
             return "empty_mask"
         tracker = cv2.TrackerCSRT_create()  # type: ignore[attr-defined]
-        tracker.init(frame_bgr, to_xywh(box))
+        try:
+            tracker.init(frame_bgr, to_xywh(box))
+        except cv2.error:
+            return "init_failed"
         self._tracker = tracker
         self._shape = (frame_bgr.shape[0], frame_bgr.shape[1])
         self.last_reliable_frame = frame_idx

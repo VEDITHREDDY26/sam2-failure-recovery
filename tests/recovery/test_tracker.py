@@ -101,3 +101,29 @@ def test_non_bgr_frame_is_rejected() -> None:
         AlignedCSRT().update(np.zeros((H, W), dtype=np.uint8))
     with pytest.raises(ValueError):
         AlignedCSRT().update(np.zeros((H, W, 3), dtype=np.float32))
+
+
+def thin_mask(x0: int, y0: int, w: int, h: int) -> np.ndarray:
+    mask = np.zeros((H, W), dtype=np.bool_)
+    mask[y0 : y0 + h, x0 : x0 + w] = True
+    return mask
+
+
+@pytest.mark.parametrize(
+    "x0, y0, w, h",
+    [(30, 30, 1, 1), (30, 10, 1, 20), (10, 30, 20, 1), (0, 0, 1, 1), (W - 2, H - 2, 2, 2)],
+)
+def test_a_box_csrt_cannot_start_on_keeps_previous_state(x0: int, y0: int, w: int, h: int) -> None:
+    tracker = AlignedCSRT()
+    tracker.reinit(frame_with_square(10), mask_for(10), 0)
+    before = (tracker.last_reliable_frame, tracker.last_reliable_box)
+    assert tracker.reinit(frame_with_square(20), thin_mask(x0, y0, w, h), 5) == "init_failed"
+    assert (tracker.last_reliable_frame, tracker.last_reliable_box) == before
+    assert tracker.update(frame_with_square(10)).status == "ok"
+
+
+def test_a_box_csrt_cannot_start_on_before_any_init_stays_not_initialised() -> None:
+    tracker = AlignedCSRT()
+    assert tracker.reinit(frame_with_square(10), thin_mask(30, 10, 1, 20), 0) == "init_failed"
+    assert not tracker.initialised
+    assert tracker.update(frame_with_square(10)).status == "not_initialised"
