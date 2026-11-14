@@ -159,6 +159,47 @@ def test_signals_boxes_and_labels_come_from_a_run_on_disk(
     assert got["removed_rule"].tolist() == list(detector_eval.REMOVED)
 
 
+def test_an_object_covered_by_another_is_kept_with_an_unknown_box(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DAVIS case: SAM 2 has a mask for the object (signal area > 0) but the stored label map
+    shows another object on top, so no pixel carries its id."""
+    from src.common.layout import mask_path
+    from src.common.masks import read_label_map, write_label_map
+    from src.detection.signals import count_overlapped
+    from src.eval.check_complete import load_video
+    from src.eval.score import load_data_config
+    from tests.eval.sam2_trees import build_world, run_all
+
+    root = tmp_path / "drive"
+    monkeypatch.setenv("SAM2FR_DATA_ROOT", str(root))
+    subset = build_world(root)
+    run_all(root, subset, models=("tiny",), splits=("davis_val",))
+    cfg = load_data_config()
+    output_root = cfg.data_root / cfg.output_root
+    before, _ = detector_eval.split_inputs("tiny", "davis_val", subset)
+    assert count_overlapped(before) == 0
+    present = before[(before["area"] > 0) & (before["frame_index"] > 0)].iloc[0]
+    video, obj, frame = (
+        str(present["video"]),
+        int(present["object_id"]),
+        int(present["frame_index"]),
+    )
+    stem = load_video(cfg, "davis_val", video).frame_stems[frame]
+    path = mask_path(output_root, "sam2_tiny", "davis_val", video, stem)
+    label = read_label_map(path)
+    label[label == obj] = 0
+    write_label_map(path, label)
+
+    after, _ = detector_eval.split_inputs("tiny", "davis_val", subset)
+    assert count_overlapped(after) == 1
+    row = after[
+        (after["video"] == video) & (after["object_id"] == obj) & (after["frame_index"] == frame)
+    ].iloc[0]
+    assert row["area"] > 0 and pd.isna(row["box_x0"])
+    assert len(after) == len(before)
+
+
 @pytest.mark.parametrize("rule", ALL_RULES)
 def test_ablation_configs_switch_off_exactly_one_rule(rule: str) -> None:
     cfg = load_recovery_config(CONFIG_DIR / f"rules_no_{rule}_csrt_tiny.yaml")

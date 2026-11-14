@@ -39,7 +39,7 @@ from src.detection.rules import (
     batch_flags,
     load_rules_config,
 )
-from src.detection.signals import join_signals_boxes
+from src.detection.signals import count_overlapped, join_signals_boxes
 from src.eval.check_complete import MODELS, SUBSET_FILE, check_run, load_video, split_videos
 from src.eval.score import load_data_config
 from src.sam2_runner.predictor import REPO_ROOT
@@ -133,8 +133,16 @@ def split_inputs(model: str, split: str, subset_file: Path) -> tuple[pd.DataFram
         boxes.append(video_boxes(video, output_root, method, split))
         labels.append(video_labels(video, output_root, method, split))
         tables.append(read_signals(signals_path(output_root, method, split, name)))
+    # Same opt-in as the SA-V val tuning: an object fully covered by another object has a SAM 2
+    # mask (area > 0 in the signal file) but no pixels in the stored label map, so its box is
+    # unknown and the disappearance rule cannot fire from that frame.
     table = join_signals_boxes(
-        pd.concat(tables, ignore_index=True), pd.concat(boxes, ignore_index=True)
+        pd.concat(tables, ignore_index=True),
+        pd.concat(boxes, ignore_index=True),
+        allow_overlapped=True,
+    )
+    sys.stdout.write(
+        f"{method}/{split}: overlapped rows (area > 0, no box) = {count_overlapped(table)}\n"
     )
     return table, pd.concat(labels, ignore_index=True)
 
