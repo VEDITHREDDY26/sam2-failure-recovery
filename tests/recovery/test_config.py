@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 
 from src.common.config import ConfigError
-from src.recovery.config import RULE_NAMES, RecoveryRunConfig, load_recovery_config
+from src.recovery.config import (
+    RULE_NAMES,
+    RecoveryRunConfig,
+    VerifiedRunConfig,
+    load_recovery_config,
+)
 
 EXTRA = 'tracker_mode: ""\ndisabled_rules: []\n'
 
@@ -11,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
     p
     for p in (ROOT / "configs" / "recovery").glob("*.yaml")
-    if p.name not in ("box_check.yaml", "recovery.yaml")
+    if p.name not in ("box_check.yaml", "recovery.yaml") and not p.name.startswith("verified_")
 ) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
 
 
@@ -126,3 +131,44 @@ def test_learned_in_the_name_iff_the_detector_is_learned() -> None:
         _learned("fix_rules_csrt_tiny", "learned")
     with pytest.raises(ConfigError):
         _learned("fix_learned_csrt_tiny", "rules")
+
+
+VERIFIED = sorted((ROOT / "configs" / "recovery").glob("verified_*.yaml"))
+
+
+def test_verified_configs_exist_for_both_models() -> None:
+    assert [p.name for p in VERIFIED] == [
+        "verified_rules_csrt_large.yaml",
+        "verified_rules_csrt_tiny.yaml",
+    ]
+
+
+@pytest.mark.parametrize("path", VERIFIED, ids=lambda p: p.name)
+def test_verified_config_loads_and_points_to_the_verify_file(path: Path) -> None:
+    cfg = load_recovery_config(path)
+    assert isinstance(cfg, VerifiedRunConfig)
+    assert cfg.method == f"fix_verified_{path.stem.removeprefix('verified_')}"
+    assert cfg.verify_path() == ROOT / "configs" / "verify" / "verify.yaml"
+    assert (cfg.detector, cfg.box_source) == ("rules", "csrt")
+
+
+def test_verified_name_and_kind_go_together() -> None:
+    plain = dict(detector="rules", box_source="csrt", tracker_mode="", disabled_rules=[])
+    with pytest.raises(ConfigError):
+        RecoveryRunConfig(method="fix_verified_rules_csrt_tiny", **plain)
+    with pytest.raises(ConfigError):
+        VerifiedRunConfig(method="fix_rules_csrt_tiny", verify_config="x.yaml", **plain)
+    with pytest.raises(ConfigError):
+        VerifiedRunConfig(method="fix_verified_rules_csrt_tiny", verify_config="", **plain)
+
+
+def test_verified_run_cannot_use_oracle_pieces() -> None:
+    with pytest.raises(ConfigError):
+        VerifiedRunConfig(
+            method="fix_verified_oracle_tiny",
+            detector="oracle",
+            box_source="csrt",
+            tracker_mode="",
+            disabled_rules=[],
+            verify_config="x.yaml",
+        )

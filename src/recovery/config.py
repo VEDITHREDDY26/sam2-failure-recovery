@@ -17,7 +17,8 @@ DETECTORS = ("rules", "learned", "oracle")
 BOX_SOURCES = ("csrt", "oracle")
 TRACKER_MODES = ("reinit", "continuous")
 RULE_NAMES = ("low_score", "area_change", "centre_jump", "disappearance")
-CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "recovery"
+ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = ROOT / "configs" / "recovery"
 
 
 @register("recovery_run")
@@ -57,6 +58,8 @@ class RecoveryRunConfig:
             raise ConfigError(f"'{self.method}': 'learned' in the name iff detector is learned")
         if ("continuous" in self.method) != (self.tracker_mode == "continuous"):
             raise ConfigError(f"'{self.method}': 'continuous' in the name iff tracker_mode is")
+        if ("verified" in self.method) != isinstance(self, VerifiedRunConfig):
+            raise ConfigError(f"'{self.method}': 'verified' in the name iff a verified config")
         for rule in RULE_NAMES:
             if (f"no_{rule}" in self.method) != (rule in self.disabled_rules):
                 raise ConfigError(f"'{self.method}': 'no_{rule}' in the name iff the rule is off")
@@ -64,6 +67,24 @@ class RecoveryRunConfig:
     @property
     def enabled_rules(self) -> tuple[str, ...]:
         return tuple(r for r in RULE_NAMES if r not in self.disabled_rules)
+
+
+@register("verified_recovery_run")
+@dataclasses.dataclass(frozen=True)
+class VerifiedRunConfig(RecoveryRunConfig):
+    """A real-system run whose re-prompts are verified with the frozen thresholds."""
+
+    verify_config: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (self.detector, self.box_source) != ("rules", "csrt"):
+            raise ConfigError(f"'{self.method}': verified recovery is rules + csrt only")
+        if not self.verify_config:
+            raise ConfigError(f"'{self.method}': verify_config must name the thresholds file")
+
+    def verify_path(self) -> Path:
+        return ROOT / self.verify_config
 
 
 def load_recovery_config(path: Path) -> RecoveryRunConfig:

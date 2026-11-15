@@ -35,6 +35,7 @@ from src.recovery.events import EVENT_COLUMNS, Event
 from src.recovery.recovery import Logits, RecoveryRun
 from src.recovery.settings import RecoverySettings
 from src.recovery.sources import BoxSource, Detector, Frame
+from src.recovery.verify import VerifyThresholds, candidate_path, write_candidates
 from src.sam2_runner.predictor import VideoPredictor
 from src.sam2_runner.prompts import BatchPrompts, Prompts
 from src.sam2_runner.run import frames_dir_for
@@ -212,10 +213,13 @@ def is_online_complete(
     video: str,
     stems: Sequence[str],
     obj_ids: Sequence[int],
+    with_candidates: bool = False,
 ) -> bool:
     """Valid signals (one row per object and frame), events, timing and every PNG exist."""
     csv_path = signals_path(output_root, method, split, video)
     if not (csv_path.is_file() and events_path(output_root, method, split, video).is_file()):
+        return False
+    if with_candidates and not candidate_path(output_root, method, split, video).is_file():
         return False
     if not timing_path(output_root, method, split, video).is_file():
         return False
@@ -233,6 +237,7 @@ def is_online_complete(
 def _clear(output_root: Path, method: str, split: str, video: str) -> None:
     clear_video(output_root, method, split, video)
     events_path(output_root, method, split, video).unlink(missing_ok=True)
+    candidate_path(output_root, method, split, video).unlink(missing_ok=True)
 
 
 def _write_events(path: Path, events: Sequence[Event]) -> None:
@@ -260,6 +265,8 @@ def run_video(
     split: str,
     video: str,
     offload_video: bool = False,
+    verifier: VerifyThresholds | None = None,
+    log_candidates: bool = False,
 ) -> OnlineResult:
     """Run one video; PNGs as frames arrive, then timing, events and (last) the signal CSV."""
     check_online_method(method)
@@ -283,7 +290,7 @@ def run_video(
         reading[0] += time.perf_counter() - tick
         return frame
 
-    run = RecoveryRun(timed, detector, boxes, box_check, settings)
+    run = RecoveryRun(timed, detector, boxes, box_check, settings, verifier, log_candidates)
     loop_start = time.perf_counter()
     events = run.run(
         video, str(frames_dir), len(stems), read_frame, prompts.boxes, start, sink, offload_video
@@ -297,6 +304,8 @@ def run_video(
     row.update(restarts=timed.restarts, restart_s=timed.restart_s)
     _write_timing(timing_path(output_root, method, split, video), row)
     _write_events(events_path(output_root, method, split, video), events)
+    if verifier is not None or log_candidates:
+        write_candidates(candidate_path(output_root, method, split, video), run.candidates)
     signals = signals_path(output_root, method, split, video)
     temp = signals.with_name(signals.name + TEMP_SUFFIX)
     write_signals(temp, table)
@@ -315,6 +324,8 @@ def run_batch(
     settings: RecoverySettings,
     videos: Sequence[str] | None = None,
     offload_video: bool = False,
+    verifier: VerifyThresholds | None = None,
+    log_candidates: bool = False,
 ) -> tuple[int, int]:
     """Run every selected video that is not complete; return (run, skipped)."""
     check_online_method(method)
@@ -330,7 +341,13 @@ def run_batch(
         frames_dir = frames_dir_for(cfg, prompts.split, video)
         stems = [p.stem for p in frame_paths(frames_dir)]
         if is_online_complete(
-            output_root, method, prompts.split, video, stems, sorted(entry.boxes)
+            output_root,
+            method,
+            prompts.split,
+            video,
+            stems,
+            sorted(entry.boxes),
+            verifier is not None or log_candidates,
         ):
             print(f"{video}: skipped (complete)")
             skipped += 1
@@ -350,6 +367,8 @@ def run_batch(
             prompts.split,
             video,
             offload_video,
+            verifier,
+            log_candidates,
         )
         recovered = sum(1 for e in result.events if e.action == "reprompted")
         print(

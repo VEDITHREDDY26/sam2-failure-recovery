@@ -7,6 +7,7 @@ import pytest
 from experiments.e2 import run_online
 from src.common.layout import events_path, signals_path
 from src.recovery.events import EVENT_COLUMNS
+from src.recovery.verify import candidate_path
 from tests.recovery.fakes import StatefulFake
 from tests.recovery.online_helpers import SPLIT, VIDEO, make_tree
 
@@ -86,3 +87,72 @@ def test_continuous_variant_runs_with_the_tracker_mode_of_its_config(
     assert seen == ["continuous"]
     out = tmp_path / "drive" / "outputs"
     assert signals_path(out, "fix_continuous_rules_csrt_tiny", SPLIT, VIDEO).is_file()
+
+
+VERIFIED_CONFIG = "configs/recovery/verified_rules_csrt_tiny.yaml"
+ACCEPT_ALL = (
+    "kind: verify\n"
+    "tiny: {s_min: -.inf, r_max: .inf, b_min: -.inf, accept_nothing: false}\n"
+    "large: {s_min: -.inf, r_max: .inf, b_min: -.inf, accept_nothing: false}\n"
+)
+
+
+def verified_config(tmp_path: Path, verify_file: Path) -> Path:
+    text = Path(VERIFIED_CONFIG).read_text().replace("configs/verify/verify.yaml", str(verify_file))
+    path = tmp_path / "verified.yaml"
+    path.write_text(text)
+    return path
+
+
+def quiet_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(f"kind: rules\ntiny: {QUIET}\nlarge: {QUIET}\n")
+    monkeypatch.setattr(run_online, "build_predictor", lambda *a, **k: StatefulFake())
+    monkeypatch.setattr(run_online, "DEFAULT_RULES_PATH", rules)
+
+
+def test_verified_run_refuses_until_the_verify_file_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = write_prompts(tmp_path, monkeypatch)
+    quiet_rules(tmp_path, monkeypatch)
+    config = verified_config(tmp_path, tmp_path / "missing.yaml")
+    with pytest.raises(SystemExit, match="not frozen"):
+        run_online.main(["--config", str(config), "--prompts", str(prompts)])
+    assert not signals_path(
+        tmp_path / "drive" / "outputs", "fix_verified_rules_csrt_tiny", SPLIT, VIDEO
+    ).exists()
+
+
+def test_verified_run_writes_the_candidate_log_next_to_the_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts = write_prompts(tmp_path, monkeypatch)
+    quiet_rules(tmp_path, monkeypatch)
+    verify = tmp_path / "verify.yaml"
+    verify.write_text(ACCEPT_ALL)
+    config = verified_config(tmp_path, verify)
+    run_online.main(["--config", str(config), "--prompts", str(prompts)])
+    out = tmp_path / "drive" / "outputs"
+    method = "fix_verified_rules_csrt_tiny"
+    assert signals_path(out, method, SPLIT, VIDEO).is_file()
+    assert candidate_path(out, method, SPLIT, VIDEO).is_file()
+
+
+def test_verified_run_refuses_the_tuning_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cfg = run_online.load_recovery_config(Path(VERIFIED_CONFIG))
+    with pytest.raises(SystemExit, match="tuning split"):
+        run_online.choose_verifier(run_cfg, "tiny", "sav_val", False)
+    with pytest.raises(SystemExit, match="accept-all"):
+        run_online.choose_verifier(run_cfg, "tiny", "sav_test", True)
+
+
+def test_candidate_logging_is_for_sav_val_and_the_plain_method_only() -> None:
+    plain = run_online.load_recovery_config(Path(REAL_CONFIG))
+    assert run_online.choose_verifier(plain, "tiny", "sav_val", True) is None
+    assert run_online.choose_verifier(plain, "tiny", "davis_val", False) is None
+    for split in ("davis_val", "sav_test"):
+        with pytest.raises(SystemExit, match="tuning run"):
+            run_online.choose_verifier(plain, "tiny", split, True)
