@@ -1,0 +1,11 @@
+kind: verify
+tiny:
+  s_min: -.inf
+  r_max: .inf
+  b_min: -.inf
+  accept_nothing: true
+large:
+  s_min: -.inf
+  r_max: .inf
+  b_min: -.inf
+  accept_nothing: true
