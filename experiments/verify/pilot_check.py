@@ -1,7 +1,8 @@
 """Check a verified run against the cached SAM 2 alone masks.
 
     python -m experiments.verify.pilot_check \
-        --config configs/recovery/verified_rules_csrt_tiny.yaml --prompts prompts/davis_val.json [--videos a b] [--out results/verify_pilot_check.csv]
+        --config configs/recovery/verified_rules_csrt_tiny.yaml \
+        --prompts prompts/davis_val.json [--videos a b] [--out results/verify_pilot_check.csv]
 
 Every video whose candidates were all rejected must equal the cached sam2_<model> label maps on
 every frame (a rejection restarts SAM 2 and must leave the un-prompted output); every other
