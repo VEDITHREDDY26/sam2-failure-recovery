@@ -13,6 +13,7 @@ rejected boxes and cooldown are recorded as events, never replaced by another bo
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
@@ -24,6 +25,7 @@ from src.recovery.box_check import BoxCheck
 from src.recovery.events import Event
 from src.recovery.settings import RecoverySettings
 from src.recovery.sources import BoxSource, Detector, Frame
+from src.recovery.verify import CandidateRow, VerifyThresholds, candidate_features
 from src.sam2_runner.predictor import VideoPredictor, to_numpy
 from src.sam2_runner.runner import sam2_box
 from src.sam2_runner.scores import object_score
@@ -42,7 +44,12 @@ class RecoveryRun:
         boxes: BoxSource,
         box_check: BoxCheck,
         settings: RecoverySettings,
+        verifier: VerifyThresholds | None = None,
+        log_candidates: bool = False,
     ) -> None:
+        self.verifier = verifier
+        self.log_candidates = log_candidates
+        self.candidates: list[CandidateRow] = []
         self.predictor = predictor
         self.detector = detector
         self.boxes = boxes
@@ -68,6 +75,8 @@ class RecoveryRun:
         self._video, self._start, self._prompts = video, start_frame, dict(prompts)
         self._recoveries: list[tuple[int, int, Box]] = []
         self._last_reprompt: dict[int, int] = {}
+        self._reliable_area: dict[int, int] = {}
+        self.candidates = []
         events: list[Event] = []
         state = self.predictor.init_state(frames_dir, offload_video_to_cpu=offload_video)
         self._add_prompts(state)
@@ -82,8 +91,14 @@ class RecoveryRun:
                 self._start_objects(frame, expected, arrays, scores)
             else:
                 accepted = self._decide(expected, frame, arrays, scores, events)
-                if accepted:
+                if accepted and (self.verifier is not None or self.log_candidates):
+                    stream, arrays, scores, accepted = self._restart_checked(
+                        state, expected, accepted, arrays, scores, events
+                    )
+                    self._after_recovery(frame, expected, arrays, scores, accepted)
+                elif accepted:
                     stream = self._restart(state, expected, accepted)
+                    self._commit(expected, accepted)
                     arrays, scores = self._unpack(state, self._next(stream, expected))
                     self._after_recovery(frame, expected, arrays, scores, accepted)
             sink(expected, arrays, scores)
@@ -113,6 +128,7 @@ class RecoveryRun:
             shape = (mask.shape[0], mask.shape[1])
             self.detector.observe(obj_id, index, mask, scores[obj_id], shape)
             self.boxes.start(obj_id, index, frame, mask)
+            self._reliable_area[obj_id] = int(np.count_nonzero(mask))
 
     def _decide(
         self,
@@ -129,6 +145,7 @@ class RecoveryRun:
             decision = self.detector.update(obj_id, index, mask, scores[obj_id], shape)
             if not decision.flag:
                 self.boxes.observe(obj_id, index, frame, mask)
+                self._reliable_area[obj_id] = int(np.count_nonzero(mask))
                 continue
             fired = decision.fired
             last = self._last_reprompt.get(obj_id)
@@ -195,9 +212,80 @@ class RecoveryRun:
             )
         for obj_id, box in accepted.items():
             self.predictor.add_new_points_or_box(state, index, obj_id, box=sam2_box(box))
+        return self.predictor.propagate_in_video(state, start_frame_idx=index)
+
+    def _commit(self, index: int, accepted: dict[int, Box]) -> None:
+        for obj_id, box in accepted.items():
             self._recoveries.append((index, obj_id, box))
             self._last_reprompt[obj_id] = index
-        return self.predictor.propagate_in_video(state, start_frame_idx=index)
+
+    def _restart_checked(
+        self,
+        state: Any,
+        index: int,
+        candidates: dict[int, Box],
+        flagged: dict[int, Logits],
+        flagged_scores: dict[int, float],
+        events: list[Event],
+    ) -> tuple[Iterator[Output], dict[int, Logits], dict[int, float], dict[int, Box]]:
+        """Restart with every candidate box, judge each, restart again if some are rejected."""
+        stream = self._restart(state, index, candidates)
+        arrays, scores = self._unpack(state, self._next(stream, index))
+        passed: dict[int, Box] = {}
+        for obj_id, box in candidates.items():
+            failed = self._judge(obj_id, index, box, flagged, flagged_scores, arrays, scores)
+            if failed:
+                self._last_reprompt[obj_id] = index
+                self._mark_rejected(events, obj_id, index, ",".join(failed))
+            else:
+                passed[obj_id] = box
+        self._commit(index, passed)
+        if len(passed) == len(candidates):
+            return stream, arrays, scores, passed
+        stream = self._restart(state, index, passed)
+        arrays, scores = self._unpack(state, self._next(stream, index))
+        return stream, arrays, scores, passed
+
+    def _judge(
+        self,
+        obj_id: int,
+        index: int,
+        box: Box,
+        flagged: dict[int, Logits],
+        flagged_scores: dict[int, float],
+        arrays: dict[int, Logits],
+        scores: dict[int, float],
+    ) -> list[str]:
+        ratio, overlap, same = candidate_features(
+            arrays[obj_id] > 0, flagged[obj_id] > 0, box, self._reliable_area.get(obj_id, 0)
+        )
+        failed = self.verifier.failed(scores[obj_id], ratio, overlap) if self.verifier else []
+        self.candidates.append(
+            CandidateRow(
+                self._video,
+                obj_id,
+                index,
+                scores[obj_id],
+                flagged_scores[obj_id],
+                ratio,
+                overlap,
+                same,
+                not failed,
+                ",".join(failed),
+            )
+        )
+        return failed
+
+    @staticmethod
+    def _mark_rejected(events: list[Event], obj_id: int, index: int, reason: str) -> None:
+        for position in range(len(events) - 1, -1, -1):
+            event = events[position]
+            if (event.object_id, event.frame_index, event.action) == (obj_id, index, "reprompted"):
+                events[position] = dataclasses.replace(
+                    event, action="verify_rejected", reason=reason
+                )
+                return
+        raise RuntimeError(f"no re-prompt event for object {obj_id} at frame {index}")
 
     def _after_recovery(
         self,
@@ -212,3 +300,4 @@ class RecoveryRun:
             shape = (mask.shape[0], mask.shape[1])
             self.detector.observe(obj_id, index, mask, scores[obj_id], shape)
             self.boxes.start(obj_id, index, frame, mask)
+            self._reliable_area[obj_id] = int(np.count_nonzero(mask))
