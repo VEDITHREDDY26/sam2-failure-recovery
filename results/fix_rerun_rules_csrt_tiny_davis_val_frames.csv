@@ -1,0 +1,10 @@
+video,object_id,labelled_frames,sam2_failures,fix_failures,frames_recovered,frames_broken
+bmx-trees,1,80,20,24,0,4
+bmx-trees,2,80,7,7,0,0
+cows,1,104,0,0,0,0
+dog,1,60,0,0,0,0
+mbike-trick,1,79,0,0,0,0
+mbike-trick,2,79,0,0,0,0
+paragliding-launch,1,80,80,80,0,0
+paragliding-launch,2,80,76,76,0,0
+paragliding-launch,3,80,80,80,0,0
