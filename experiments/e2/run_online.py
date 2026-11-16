@@ -11,6 +11,7 @@ Real system only: oracle configs are refused. The rule thresholds must have been
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -56,6 +57,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(f"{DATA_ROOT_ENV} is not set")
     model = model_of(run_cfg)
     settings = load_recovery_settings(CONFIG_PATH)
+    if run_cfg.tracker_mode:
+        settings = dataclasses.replace(settings, tracker_mode=run_cfg.tracker_mode)
     data = load_data_config()
     prompts = load_batch_prompts(args.prompts)
     run_batch(
@@ -63,7 +66,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         data,
         run_cfg.method,
         lambda: build_predictor(model, data.data_root, device=args.device),
-        lambda video: OnlineRuleDetector.from_config(model, DEFAULT_RULES_PATH),
+        lambda video: OnlineRuleDetector.from_config(
+            model, DEFAULT_RULES_PATH, run_cfg.enabled_rules
+        ),
         lambda video: CSRTBoxSource(settings.tracker_mode),
         BoxCheck(load_box_check_config()),
         settings,
