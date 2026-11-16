@@ -1,0 +1,6 @@
+type,count,share,count_davis_val,count_sav_test
+occlusion,16,0.4,0,16
+fast_motion,1,0.025,0,1
+distractor,12,0.3,0,12
+leaves_frame,9,0.225,0,9
+other,2,0.05,0,2

@@ -1,0 +1,41 @@
+sample_id,type,notes
+s01,leaves_frame,left past the right edge at ~244 and absent until 400 - SAM 2 alone marks a dancer's flag
+s02,leaves_frame,paw lifted to the top edge and cut by it at 116-120 - SAM 2 alone then moves to the other paw
+s03,occlusion,patch on the turning mixer drum rotates over the top and is hidden by the drum itself (self-occlusion) - SAM 2 alone empty
+s04,occlusion,patch re-emerging under the drum after full self-occlusion (156-180) still mostly hidden just before - SAM 2 alone marks the painted characters
+s05,occlusion,tabby cat moves in front of the white target cat (visible area 13.6% to 2.7%) - left-edge contact was there all along - SAM 2 alone spreads onto the tabby
+s06,occlusion,distant person in a light coat is covered by a nearer man in a black jacket walking in front (56-76)
+s07,occlusion,man's hand swings behind his own jacket and is hidden at 180-184 (self-occlusion)
+s08,leaves_frame,person goes out past the bottom-left edge as the camera pans (area 2.3% to 0.04% touching the left edge) and returns at 172-180 - SAM 2 alone empty
+s09,occlusion,thin background rod is mostly covered by the woman's arm at the alarm (visible area 188 px at 88 vs about 1000 normally)
+s10,occlusion,same rod repeatedly crossed by the woman's arm - only the lower piece visible around 250-256 - SAM 2 alone keeps a blob above the arm
+s11,occlusion,far cyclist in the dark is hidden behind the nearer cyclist's head and shoulders (276-296)
+s12,leaves_frame,camera turns right and the machine slides out past the left edge (area 3.7% to 1.5% touching it then not visible)
+s13,leaves_frame,fast camera swing - the machine is cut by the right edge at 378 and gone from 380 (heavy blur)
+s14,distractor,very thin wand toy stays visible - from the first frames SAM 2 alone marks a blob above its right end instead of the thin line
+s15,fast_motion,squash racket swung hard - jumps across the image and blurs between 12 and 20 - SAM 2 alone outline lags (it was hidden behind the player at 0-8 but fully visible from 12)
+s16,distractor,one red bauble among many identical ones as the camera circles the tree - SAM 2 alone sits on a neighbouring bauble
+s17,occlusion,bauble turns to the far side of the tree as the camera circles - shrinks 240-264 and hidden from 268
+s18,occlusion,ornament goes round the back of the tree (hidden 64-144 not at an edge) - SAM 2 alone empty then marks another ornament from 78
+s19,distractor,ornament back in full view from 160 after going round the tree - SAM 2 alone is on a different red ornament to its right
+s20,occlusion,thumbnail hidden by the hand itself as it turns palm-up to scoop water (not visible 84-92) - SAM 2 alone empty while hidden and picks it up again at 99
+s21,distractor,target is the leftmost fingernail by the rim and stays visible - SAM 2 alone marks the thumbnail (a different similar nail)
+s22,distractor,same leftmost fingernail - SAM 2 alone on the thumbnail at 402-408 - GT drops out at 408 with nothing covering it (hand motion)
+s23,distractor,same leftmost fingernail visible around the alarm - SAM 2 alone marks the thumbnail
+s24,occlusion,middle fingernail dips under the water surface (not visible at 48 just before the alarm) - hand also jumps a lot between frames
+s25,occlusion,middle fingernail under the water for most of 152-200 (hidden at 200 just before the alarm) - SAM 2 alone marks the thumbnail
+s26,distractor,middle fingernail visible at 300-308 with a fast-moving hand - SAM 2 alone empty or on the thumbnail (302 and 306)
+s27,distractor,middle fingernail visible at 344-348 (last under water at 340) - SAM 2 alone on the thumbnail throughout
+s28,distractor,middle fingernail visible at 404-412 - SAM 2 alone on the thumbnail throughout
+s29,occlusion,fourth fingernail hidden from 60 to 192 (fingertip in the water or turned away - not at an edge) - SAM 2 alone marks the thumbnail
+s30,occlusion,fourth fingernail under the water for most of 160-192 and at the alarm frame 200 (visible only at 196 and 204-212) - SAM 2 alone on the thumbnail
+s31,distractor,fourth fingernail visible at 300-316 around the alarm (hidden only at 296) - SAM 2 alone on the thumbnail or empty
+s32,distractor,fourth fingernail visible through the whole strip - SAM 2 alone on the thumbnail
+s33,other,thin low-contrast leg of a rhea stays visible and moves slowly - SAM 2 alone empty for the whole window with no occluder or similar object
+s34,leaves_frame,lanyard is outside the left edge from 324 to 368 and re-enters cut by it at the alarm 372 - SAM 2 alone marks the climber's other lanyard
+s35,distractor,lanyard visible throughout on the climber's left - SAM 2 alone marks the other similar lanyard in the middle
+s36,other,large gift bag clearly visible (11-15% of the image) but SAM 2 alone empty for the whole window (lost before it) - a hand grabs and turns the bag at 324-336 (appearance change - only partly covered)
+s37,occlusion,woman in the white sweater moves behind the woman in black (visible area 15.8% to 1.9% at the alarm)
+s38,leaves_frame,tiny patch (a distant person) drifts right to the image edge (1 px from it at 144) and is gone 148-176 - SAM 2 alone empty
+s39,leaves_frame,same distant person is past the right edge 148-176 and re-enters cut by it from 180 through the alarm - SAM 2 alone empty
+s40,leaves_frame,dark target left past the right edge at about 16-20 and is absent until 372 - SAM 2 alone marks a different dark region (a black garment)

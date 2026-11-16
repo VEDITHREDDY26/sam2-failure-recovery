@@ -1,0 +1,4 @@
+model,test_set,method,videos,objects,J,F,J&F,delta_JF,delta_JF_vs_e2,videos_improved,videos_worse,videos_unchanged,reprompts,verify_rejected,rejected,tracker_lost,frames_recovered,frames_broken
+tiny,davis_val,sam2_tiny,30,61,0.8004062131495135,0.8785886618413062,0.8394974374954098,0.0,,,,,,,,,,
+tiny,davis_val,fix_rules_csrt_tiny,30,61,0.7910050010546079,0.8666537828205068,0.8288293919375572,-0.010668045557852612,,5,4,21,32,0,0,0,16,49
+tiny,davis_val,fix_verified_rules_csrt_tiny,30,61,0.8004062131495135,0.8785886618413062,0.8394974374954098,0.0,0.010668045557852612,0,0,30,0,33,0,0,0,0

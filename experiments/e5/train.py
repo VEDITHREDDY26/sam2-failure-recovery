@@ -7,10 +7,12 @@
 Same SA-V val export and refusals as the rule tuning. Videos are split 80 / 20 by sorted name with
 random.Random(5415); the two parts are asserted disjoint. The regression (class_weight balanced,
 fixed seed, standardised features) is fitted on the annotated frames of the train videos only
-(label = failure at that frame), and its decision threshold is the one with the best window-level
-F1 on the train videos (grid 0.05 .. 0.95, ties -> the higher threshold). The held-out videos are
-then scored with window-level precision, recall, F1 and PR-AUC (average precision of each window's
-maximum probability), next to the frozen rules on the same held-out videos. Writes
+(label = failure at that frame). Its frozen decision threshold is the best window-level F1 on the
+train videos (grid 0.05 .. 0.95, ties -> the higher threshold) among thresholds that flag at most
+FROZEN_MAX_FLAG_RATE of the train windows (same budget as the frozen rules); the saved model holds
+only this threshold, and the uncapped threshold appears as a second, unfrozen csv row. The held-out
+videos are then scored with window-level precision, recall, F1 and PR-AUC (average precision of
+each window's maximum probability), next to the frozen rules on the same held-out videos. Writes
 <learned-dir>/logreg_<model>.json with its .sha256 (record the hash before any test run),
 results/e5_detector.csv and results/e5_weights.csv. An existing model file is never overwritten
 without --overwrite.
@@ -33,6 +35,8 @@ from sklearn.metrics import average_precision_score
 
 from experiments.tune_rules.tune import (
     EXPECTED_VIDEOS,
+    FROZEN_MAX_FLAG_RATE,
+    SELECTION_CAPPED,
     SPLIT,
     TuneInputError,
     Windows,
@@ -68,7 +72,11 @@ DETECTOR_COLUMNS = (
     "f1",
     "pr_auc",
     "threshold",
+    "selection",
+    "frozen",
 )
+SELECTION_PROTOCOL = "f1_protocol"
+SELECTION_RULES = "rules_frozen"
 WEIGHT_COLUMNS = ("model", "feature", "weight", "mean", "std")
 FloatArray = npt.NDArray[np.float64]
 
@@ -150,8 +158,18 @@ def window_counts(hit: npt.NDArray[np.bool_], truth: npt.NDArray[np.bool_]) -> d
     }
 
 
-def choose_threshold(best: FloatArray, truth: npt.NDArray[np.bool_]) -> float:
-    scored = [(float(window_counts(best >= t, truth)["f1"]), t) for t in THRESHOLD_GRID]
+def choose_threshold(
+    best: FloatArray, truth: npt.NDArray[np.bool_], max_flag_rate: float | None = None
+) -> float:
+    """Best window F1 on the grid (ties -> higher threshold); with a cap, only thresholds
+    flagging at most max_flag_rate of the windows are eligible, and none eligible is an error."""
+    scored = [
+        (float(window_counts(best >= t, truth)["f1"]), t)
+        for t in THRESHOLD_GRID
+        if max_flag_rate is None or (best >= t).sum() <= max_flag_rate * len(truth)
+    ]
+    if not scored:
+        raise ValueError(f"no threshold flags at most {max_flag_rate:.0%} of the train windows")
     return max(scored)[1]
 
 
@@ -171,9 +189,9 @@ def train_model(
     features, failure = training_rows(t_table, t_labels)
     fitted = fit(features, failure, model)
     t_windows = build_windows(t_table, t_labels)
-    threshold = choose_threshold(
-        window_max(fitted.table_probabilities(t_table), t_windows), t_windows.truth
-    )
+    train_best = window_max(fitted.table_probabilities(t_table), t_windows)
+    uncapped = choose_threshold(train_best, t_windows.truth)
+    threshold = choose_threshold(train_best, t_windows.truth, FROZEN_MAX_FLAG_RATE)
     final = LearnedModel(
         fitted.sam2_model, fitted.mean, fitted.std, fitted.coef, fitted.intercept, threshold
     )
@@ -182,11 +200,18 @@ def train_model(
     rules = load_rules_config(model, rules_path)
     rule_hit = window_any(batch_flags(h_table, rules)["flag"].to_numpy(dtype=bool), h_windows)
     common = {"model": model, "train_videos": len(train), "heldout_videos": len(held)}
+    auc = pr_auc(best, h_windows.truth)
     rows = [
-        {**common, "method": "logreg", **window_counts(best >= threshold, h_windows.truth),
-         "pr_auc": pr_auc(best, h_windows.truth), "threshold": threshold},
+        {**common, "method": "logreg", **window_counts(best >= t, h_windows.truth),
+         "pr_auc": auc, "threshold": t, "selection": name, "frozen": frozen}
+        for t, name, frozen in (
+            (uncapped, SELECTION_PROTOCOL, False),
+            (threshold, SELECTION_CAPPED, True),
+        )
+    ] + [
         {**common, "method": "rules", **window_counts(rule_hit, h_windows.truth),
-         "pr_auc": float("nan"), "threshold": float("nan")},
+         "pr_auc": float("nan"), "threshold": float("nan"),
+         "selection": SELECTION_RULES, "frozen": True},
     ]  # fmt: skip
     return final, rows
 

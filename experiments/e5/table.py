@@ -70,7 +70,7 @@ def load_csv(path: Path, columns: Sequence[str]) -> pd.DataFrame:
 def build_table(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dict[str, object]]:
     detector = load_csv(results_dir / "e5_detector.csv", DETECTOR_COLUMNS)
     weights = load_csv(results_dir / "e5_weights.csv", WEIGHT_COLUMNS)
-    detector = detector[detector["model"] == MODEL].set_index("method")
+    detector = detector[(detector["model"] == MODEL) & detector["frozen"]].set_index("method")
     weights = weights[weights["model"] == MODEL].set_index("feature")["weight"]
     if sorted(detector.index) != sorted(DETECTOR_ROW.values()) or list(weights.index) != list(
         FEATURE_NAMES

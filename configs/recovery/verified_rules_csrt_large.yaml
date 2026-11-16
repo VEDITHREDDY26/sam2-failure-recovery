@@ -1,0 +1,7 @@
+kind: verified_recovery_run
+method: fix_verified_rules_csrt_large
+detector: rules
+box_source: csrt
+tracker_mode: ""
+disabled_rules: []
+verify_config: configs/verify/verify.yaml

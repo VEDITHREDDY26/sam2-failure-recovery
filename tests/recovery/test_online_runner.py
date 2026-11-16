@@ -20,6 +20,7 @@ from src.recovery.online_runner import (
     run_video,
 )
 from src.recovery.settings import RecoverySettings
+from src.recovery.verify import CANDIDATE_COLUMNS, candidate_path
 from src.sam2_runner.prompts import BatchPrompts
 from src.sam2_runner.timing import timing_path
 from tests.recovery.fakes import (
@@ -198,3 +199,27 @@ def test_two_prompt_frames_are_refused(tree: Any) -> None:
             SPLIT,
             VIDEO,
         )
+
+
+def test_candidate_log_is_written_and_required_for_completeness(tree: Any) -> None:
+    cfg, prompts, out = tree
+    pred = StatefulFake()
+    args = (
+        prompts,
+        cfg,
+        METHOD,
+        lambda: pred,
+        lambda video: ScriptedDetector({(1, 5): ("low_score",)}),
+        lambda video: ScriptedBoxes({(1, 5): ok(NEW_BOX)}),
+        BoxCheck(),
+        SETTINGS,
+    )
+    assert run_batch(*args, log_candidates=True) == (1, 0)
+    table = pd.read_csv(candidate_path(out, METHOD, SPLIT, VIDEO))
+    assert list(table.columns) == list(CANDIDATE_COLUMNS)
+    assert table["accepted"].tolist() == [True] and table["frame_index"].tolist() == [5]
+    stems = [f"{i:05d}" for i in range(NUM_FRAMES)]
+    assert is_online_complete(out, METHOD, SPLIT, VIDEO, stems, [1], True)
+    candidate_path(out, METHOD, SPLIT, VIDEO).unlink()
+    assert not is_online_complete(out, METHOD, SPLIT, VIDEO, stems, [1], True)
+    assert is_online_complete(out, METHOD, SPLIT, VIDEO, stems, [1])
