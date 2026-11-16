@@ -260,11 +260,12 @@ python -m experiments.e2.score --config $CFG/rules_csrt_tiny.yaml --splits davis
 python -m experiments.e2.score --config $CFG/rules_csrt_large.yaml --splits davis_val sav_test
 ```
 
-GPU, correctness pilot on three DAVIS val videos: frames before the first re-prompt must equal
-the cached SAM 2-alone masks (`results/events_pilot.csv`, `results/events_pilot_check.csv`):
+GPU, correctness check on DAVIS val: frames before the first re-prompt must equal the cached
+SAM 2-alone masks (`results/events_pilot.csv`, `results/events_pilot_check.csv`; `--videos` limits
+it to some videos):
 
 ```
-python -m experiments.e2.pilot_check --config $CFG/rules_csrt_tiny.yaml --prompts $PROMPTS/davis_val.json --videos motocross-jump paragliding-launch kite-surf --out results/events_pilot.csv
+python -m experiments.e2.pilot_check --config $CFG/rules_csrt_tiny.yaml --prompts $PROMPTS/davis_val.json --out results/events_pilot.csv
 ```
 
 MAC: `results/e2.csv`, `results/events_e2.csv`.
