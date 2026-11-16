@@ -1,0 +1,6 @@
+type,sampled,reprompted,wrong
+occlusion,16,15,13
+fast_motion,1,1,1
+distractor,12,10,8
+leaves_frame,9,8,7
+other,2,2,2
