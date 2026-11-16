@@ -7,12 +7,14 @@ from src.recovery.config import RecoveryRunConfig, load_recovery_config
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
-    p for p in (ROOT / "configs" / "recovery").glob("*.yaml") if p.name != "box_check.yaml"
+    p
+    for p in (ROOT / "configs" / "recovery").glob("*.yaml")
+    if p.name not in ("box_check.yaml", "recovery.yaml")
 ) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
 
 
 def test_shipped_configs_exist() -> None:
-    assert len(SHIPPED) == 4
+    assert len(SHIPPED) == 6
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)

@@ -1,0 +1,4 @@
+kind: recovery_run
+method: fix_rerun_rules_csrt_tiny
+detector: rules
+box_source: csrt
