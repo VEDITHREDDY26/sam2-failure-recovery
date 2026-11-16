@@ -41,6 +41,7 @@ FIGURE_SIZE = (13.0, 4.6)
 DPI = 150
 ALPHA = 0.5
 ORACLE_TAG = "ORACLE"
+SAV_SPLITS = {"sav_val": "val", "sav_test": "test"}  # result split name -> SA-V loader split
 LoadVideo = Callable[[str, str], VideoSample]
 Image = npt.NDArray[np.uint8]
 
@@ -60,7 +61,10 @@ def default_loader(cfg: DataConfig) -> LoadVideo:
     def load(split: str, name: str) -> VideoSample:
         if split == "davis_val":
             return load_davis_video(cfg, name)
-        return load_sav_video(cfg, split, name)
+        if split in SAV_SPLITS:
+            return load_sav_video(cfg, SAV_SPLITS[split], name)
+        expected = ["davis_val", *sorted(SAV_SPLITS)]
+        raise ValueError(f"unknown split '{split}': expected one of {expected}")
 
     return load
 

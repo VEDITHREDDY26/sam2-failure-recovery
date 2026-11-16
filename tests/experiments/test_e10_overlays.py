@@ -182,3 +182,25 @@ def test_demo_writes_a_readable_mp4(tmp_path: Path) -> None:
     cap = cv2.VideoCapture(str(target))
     assert cap.isOpened() and int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) == count
     cap.release()
+
+
+def test_default_loader_maps_result_split_names_to_the_dataset_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import src.data.davis
+    import src.data.sav
+
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        src.data.davis, "load_davis_video", lambda cfg, name: calls.append(("davis", "", name))
+    )
+    monkeypatch.setattr(
+        src.data.sav, "load_sav_video", lambda cfg, split, name: calls.append(("sav", split, name))
+    )
+    load = overlays.default_loader(object())  # type: ignore[arg-type]
+    load("davis_val", "a")
+    load("sav_test", "b")
+    load("sav_val", "c")
+    assert calls == [("davis", "", "a"), ("sav", "test", "b"), ("sav", "val", "c")]
+    with pytest.raises(ValueError, match="unknown split"):
+        load("test", "d")
