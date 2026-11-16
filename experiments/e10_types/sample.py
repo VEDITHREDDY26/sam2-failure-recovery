@@ -18,6 +18,7 @@ import os
 import random
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 import cv2
 import numpy as np
@@ -53,8 +54,16 @@ SAMPLE_COLUMNS = (
 TEMPLATE_COLUMNS = ("sample_id", "type", "notes")
 CLIP_RADIUS = 12
 CLIP_STEP = 2
-STRIP_COLUMNS = 5
-THUMB_WIDTH = 320
+STRIP_COLUMNS = 4
+THUMB_WIDTH = 400
+LINE_WIDTH = 2
+LEGEND_HEIGHT = 44
+SMALL_FONT = 0.5
+GREEN = (0, 255, 0)
+YELLOW = (0, 255, 255)
+ORANGE = (0, 165, 255)
+RED = (0, 0, 255)
+WHITE = (255, 255, 255)
 LoadVideo = Callable[[str, str], VideoSample]
 Image = npt.NDArray[np.uint8]
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -96,7 +105,8 @@ def build_candidates(
     for split in splits:
         loaded: dict[str, VideoSample] = {}
         for event in triggers(read_events(results_dir, split)).itertuples():
-            name, obj_id, frame = str(event.video), int(event.object_id), int(event.frame_index)  # type: ignore[call-overload]
+            name = str(event.video)
+            obj_id, frame = int(cast(int, event.object_id)), int(cast(int, event.frame_index))
             video = loaded.setdefault(name, load_video(split, name))
             gt_frame = label_frame(video, obj_id, frame)
             if gt_frame is None:
@@ -138,29 +148,70 @@ def clip_indices(frame_index: int, num_frames: int) -> list[int]:
     return [i for i in wanted if 0 <= i < num_frames]
 
 
+def _outline(canvas: Image, mask: npt.NDArray[np.bool_], colour: tuple[int, int, int]) -> None:
+    found, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(canvas, found, -1, colour, LINE_WIDTH)
+
+
+def _fit(mask: npt.NDArray[np.bool_], width: int, height: int) -> npt.NDArray[np.bool_]:
+    resized = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+    return np.asarray(resized, dtype=bool)
+
+
+def _label(frame: Image, text: str, bottom_offset: int, colour: tuple[int, int, int]) -> None:
+    origin = (6, frame.shape[0] - 8 - bottom_offset)
+    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, SMALL_FONT, colour, 1, cv2.LINE_AA)
+
+
 def _thumb(video: VideoSample, alone_dir: Path, row: pd.Series, index: int) -> Image:
     image = cv2.imread(str(video.frame_path(index)), cv2.IMREAD_COLOR)
     if image is None:
         raise OSError(f"cannot read frame {video.frame_path(index)}")
-    frame = np.asarray(image, dtype=np.uint8)
+    source = np.asarray(image, dtype=np.uint8)
+    scale = THUMB_WIDTH / source.shape[1]
+    width, height = THUMB_WIDTH, max(1, int(source.shape[0] * scale))
+    frame: Image = np.asarray(cv2.resize(source, (width, height)), dtype=np.uint8)
     obj_id = int(row["object_id"])
+    flagged = index == int(row["frame_index"])
     stem = video.frame_stems[index]
     label = read_label_map(mask_path(alone_dir, ALONE_METHOD, str(row["split"]), video.name, stem))
-    found, _ = cv2.findContours(
-        (label == obj_id).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
-    cv2.drawContours(frame, found, -1, (0, 255, 0), 2)
+    alone = _fit(label == obj_id, width, height)
+    _outline(frame, alone, GREEN)
+    gt = video.gt_mask(obj_id, index)
+    if gt is not None:
+        _outline(frame, _fit(np.asarray(gt, dtype=bool), width, height), YELLOW)
     box = [row.get(k, "") for k in ("box_x0", "box_y0", "box_x1", "box_y1")]
-    if all(str(v) != "" and not pd.isna(v) for v in box) and index == int(row["frame_index"]):
-        x0, y0, x1, y1 = (int(round(float(v))) for v in box)
-        cv2.rectangle(frame, (x0, y0), (x1, y1), (255, 128, 0), 2)
-    scale = THUMB_WIDTH / frame.shape[1]
-    frame = cv2.resize(frame, (THUMB_WIDTH, max(1, int(frame.shape[0] * scale))))
-    colour = (0, 0, 255) if index == int(row["frame_index"]) else (255, 255, 255)
+    if all(str(v) != "" and not pd.isna(v) for v in box) and flagged:
+        x0, y0, x1, y1 = (int(round(float(v) * scale)) for v in box)
+        cv2.rectangle(frame, (x0, y0), (x1, y1), ORANGE, LINE_WIDTH)
+    colour = RED if flagged else WHITE
     cv2.putText(frame, f"frame {index}", (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
-    if index == int(row["frame_index"]):
-        cv2.rectangle(frame, (0, 0), (frame.shape[1] - 1, frame.shape[0] - 1), (0, 0, 255), 3)
+    if not alone.any():
+        _label(frame, "SAM 2: empty", 0, GREEN)
+    if gt is None:
+        _label(frame, "GT: not annotated", 18, YELLOW)
+    elif not np.asarray(gt).any():
+        _label(frame, "GT: not visible", 18, YELLOW)
+    if flagged:
+        cv2.rectangle(frame, (0, 0), (width - 1, height - 1), RED, 3)
     return frame
+
+
+def _legend(sample_id: str, width: int) -> Image:
+    band = np.zeros((LEGEND_HEIGHT, width, 3), dtype=np.uint8)
+    parts = (
+        (f"{sample_id}   ", WHITE),
+        ("green = SAM 2 alone   ", GREEN),
+        ("yellow = ground truth (annotated frames)   ", YELLOW),
+        ("orange = tracker box at the flagged frame (", ORANGE),
+        ("red", RED),
+        (")", ORANGE),
+    )
+    x = 10
+    for text, colour in parts:
+        cv2.putText(band, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 1, cv2.LINE_AA)
+        x += cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0][0]
+    return band
 
 
 def render_strip(row: pd.Series, video: VideoSample, output_root: Path, path: Path) -> Path:
@@ -169,7 +220,7 @@ def render_strip(row: pd.Series, video: VideoSample, output_root: Path, path: Pa
         for i in clip_indices(int(row["frame_index"]), video.num_frames)
     ]
     height, width = thumbs[0].shape[:2]
-    rows = []
+    rows = [_legend(str(row["sample_id"]), width * STRIP_COLUMNS)]
     for start in range(0, len(thumbs), STRIP_COLUMNS):
         chunk = thumbs[start : start + STRIP_COLUMNS]
         chunk += [np.zeros((height, width, 3), dtype=np.uint8)] * (STRIP_COLUMNS - len(chunk))
@@ -204,7 +255,7 @@ def build_sample(
 ) -> pd.DataFrame:
     check_outside_repo(clips_dir)
     sample = draw_sample(build_candidates(results_dir, output_root, load_video))
-    write_csv(sample_out, SAMPLE_COLUMNS, sample.itertuples(index=False))
+    write_csv(sample_out, SAMPLE_COLUMNS, list(sample.itertuples(index=False, name=None)))
     write_csv(
         clips_dir / "labels_template.csv",
         TEMPLATE_COLUMNS,

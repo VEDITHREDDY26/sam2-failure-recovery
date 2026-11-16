@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -175,3 +176,79 @@ def test_count_main_writes_csv(tmp_path: Path) -> None:
     table = pd.read_csv(tmp_path / "o.csv")
     assert list(table.columns) == list(count.OUT_COLUMNS)
     assert table.loc[table["type"] == "occlusion", "count"].item() == 4
+
+
+def count_colour(image: np.ndarray, colour: tuple[int, int, int]) -> int:
+    return int((image == np.array(colour, dtype=np.uint8)).all(axis=-1).sum())
+
+
+def strip_row(frame: int, with_box: bool = True) -> pd.Series:
+    values: dict[str, object] = {
+        "sample_id": "s01",
+        "split": "sav_test",
+        "video": "b",
+        "object_id": 1,
+        "frame_index": frame,
+    }
+    if with_box:
+        values.update(box_x0=5, box_y0=5, box_x1=20, box_y1=20)
+    return pd.Series(values)
+
+
+def test_thumb_gt_outline_only_on_annotated_frame(
+    world: tuple[Path, Path, sample.LoadVideo],
+) -> None:
+    out, _, load = world
+    video = load("sav_test", "b")
+    on = sample._thumb(video, out, strip_row(20), 20)
+    off = sample._thumb(video, out, strip_row(20), 21)
+    assert on.shape[1] == sample.THUMB_WIDTH
+    assert count_colour(on, sample.YELLOW) > 0
+    assert count_colour(off, sample.YELLOW) == 0
+    assert count_colour(on, sample.GREEN) > 0
+
+
+def test_thumb_empty_alone_and_gt_not_visible(tmp_path: Path) -> None:
+    video = make_video(tmp_path, "sav_test", "b", (0, 10, 20, 30))
+    out = tmp_path / "out"
+    for i in range(N):
+        write_label_map(
+            mask_path(out, "sam2_tiny", "sav_test", "b", f"{i:05d}"), np.zeros((H, W), np.uint8)
+        )
+    thumb = sample._thumb(video, out, strip_row(20), 20)
+    assert count_colour(thumb, sample.GREEN) == 0
+    assert thumb.shape[0] > 0
+
+    class EmptyGt(FakeGt):
+        def read_mask(self, obj_id: int, frame_index: int) -> np.ndarray:
+            return np.zeros((H, W), dtype=bool)
+
+    video = replace(video, reader=EmptyGt((20,)))
+    assert count_colour(sample._thumb(video, out, strip_row(20), 20), sample.YELLOW) == 0
+
+
+def test_box_orange_on_flagged_frame_only(world: tuple[Path, Path, sample.LoadVideo]) -> None:
+    out, _, load = world
+    video = load("sav_test", "b")
+    row = strip_row(20)
+    assert count_colour(sample._thumb(video, out, row, 20), sample.ORANGE) > 0
+    assert count_colour(sample._thumb(video, out, row, 18), sample.ORANGE) == 0
+    assert count_colour(sample._thumb(video, out, strip_row(20, False), 20), sample.ORANGE) == 0
+
+
+def test_strip_width(world: tuple[Path, Path, sample.LoadVideo], tmp_path: Path) -> None:
+    out, _, load = world
+    path = sample.render_strip(strip_row(20), load("sav_test", "b"), out, tmp_path / "s.png")
+    assert np.asarray(Image.open(path)).shape[1] == 1600
+
+
+def test_csv_outputs_unchanged(world: tuple[Path, Path, sample.LoadVideo], tmp_path: Path) -> None:
+    out, results, load = world
+    clips, csv_out = tmp_path / "clips", tmp_path / "sample.csv"
+    made = sample.build_sample(results, out, load, clips, csv_out)
+    old = tmp_path / "old.csv"
+    drawn = sample.draw_sample(sample.build_candidates(results, out, load))
+    sample.write_csv(old, sample.SAMPLE_COLUMNS, drawn.itertuples(index=False))  # type: ignore[arg-type]
+    assert csv_out.read_bytes() == old.read_bytes()
+    expected = "sample_id,type,notes\n" + "".join(f"{s},,\n" for s in made["sample_id"])
+    assert (clips / "labels_template.csv").read_bytes() == expected.encode()
