@@ -19,8 +19,12 @@ def cand(
     status: str = "ok",
     check: bool = True,
     first: bool = False,
+    frame: int = 8,
+    scored_frame: int | None = 8,
 ) -> dict[str, object]:
     return {
+        "frame_index": frame,
+        "scored_frame": "" if scored_frame is None else scored_frame,
         "video": "v",
         "arm": arm,
         "status": status,
@@ -86,7 +90,8 @@ def choose_iou(a: Box, b: Box) -> float:
 def test_grid_shape_s_min_only_for_vit_arms() -> None:
     rows = [cand(arm, "real_failure") for arm in choose.ARM_ORDER]
     grid = pd.DataFrame(choose.grid_rows("tiny", table(rows)))
-    assert len(grid) == 3 * 4 + 3 * 6 * 4
+    assert len(grid) == 2 * (3 * 4 + 3 * 6 * 4)
+    assert set(grid["view"]) == {"exact", "all"}
     assert set(grid[~grid["arm"].str.startswith("vit_")]["s_min"]) == {"off"}
     assert set(grid[grid["arm"] == "vit_reinit"]["s_min"].astype(str)) == {
         "off",
@@ -105,6 +110,7 @@ def grid_of(entries: list[tuple[str, object, object, int, int]]) -> pd.DataFrame
             {
                 "model": "tiny",
                 "arm": arm,
+                "view": "exact",
                 "s_min": s,
                 "a_max": a,
                 "reprompts": reprompts,
@@ -177,6 +183,7 @@ def test_main_writes_the_tables_and_the_gate_file_only_on_go(tmp_path: Path) -> 
     assert choose.main(["--results-dir", str(results), "--config-dir", str(configs)]) == 0
     choice = pd.read_csv(results / "e13_choice.csv")
     assert list(choice.columns) == list(choose.CHOICE_COLUMNS)
+    assert set(choice["view"]) == {"exact"} and choice["scored_candidates"].iloc[0] == 2
     assert bool(choice["go"].iloc[0]) and (configs / "box_gate_tiny.yaml").is_file()
     assert not (configs / "box_gate_large.yaml").exists()
     assert (results / "e13_gate_grid.csv").is_file() and (results / "e13_pilot.csv").is_file()
@@ -207,3 +214,49 @@ def test_pilot_table_shares_views_and_timing() -> None:
     assert first["candidates"] == 1 and first["real_good_box_share"] == 1.0
     empty = out[(out["arm"] == "csrt_reinit") & (out["view"] == "all")].iloc[0]
     assert empty["candidates"] == 0 and math.isnan(empty["real_good_box_share"])
+
+
+def test_exact_view_keeps_only_candidates_at_their_own_annotated_frame() -> None:
+    rows = [
+        cand("a", "real_failure", frame=8, scored_frame=8),
+        cand("a", "real_failure", frame=9, scored_frame=12),
+        cand("a", "real_failure", frame=10, scored_frame=None),
+    ]
+    assert len(choose.exact_rows(table(rows))) == 1
+    out = pd.DataFrame(
+        choose.pilot_rows(
+            "tiny",
+            table([{**r, "arm": "motion"} for r in rows]),
+            pd.DataFrame([("v", "motion", 1, 1.0)], columns=list(pilot.TIMING_COLUMNS)),
+        )
+    )
+    counts = out[out["arm"] == "motion"].set_index("view")["candidates"]
+    assert list(out["view"].unique()) == list(choose.VIEWS)
+    assert (counts["exact"], counts["all"]) == (1, 3)
+
+
+def biased_world() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for arm in choose.ARM_ORDER:
+        good = arm == "vit_reinit"
+        rows.append(cand(arm, "real_failure", 0.9 if good else 0.1))  # exact
+        rows += [
+            cand(arm, "real_failure", 0.9, frame=9 + i, scored_frame=12)
+            for i in range(3 if arm == "motion" else 0)
+        ]
+    return rows
+
+
+def test_choice_and_gate_file_follow_the_exact_view(tmp_path: Path) -> None:
+    results, configs = tmp_path / "results", tmp_path / "configs"
+    configs.mkdir()
+    write_merged(results, "tiny", biased_world())
+    choose.main(["--results-dir", str(results), "--config-dir", str(configs)])
+    candidates = pd.read_csv(results / "e13_pilot_candidates_tiny_sav_val.csv")
+    grid = pd.DataFrame(choose.grid_rows("tiny", candidates))
+    pick = {v: choose.choose("tiny", grid, v) for v in ("exact", "all")}
+    assert pick["all"]["arm"] == "motion" and pick["exact"]["arm"] == "vit_reinit"
+    choice = pd.read_csv(results / "e13_choice.csv").iloc[0]
+    assert choice["arm"] == "vit_reinit" and choice["view"] == "exact"
+    assert choice["scored_candidates"] == 1 and bool(choice["go"])
+    assert (configs / "box_gate_tiny.yaml").is_file()

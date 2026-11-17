@@ -4,8 +4,14 @@
 
 Reads results/e13_pilot_candidates_<model>_sav_val.csv and the matching timing file (written by
 experiments.e13.pilot --merge) and writes results/e13_pilot.csv (per model, arm and view),
-results/e13_gate_grid.csv (per model, arm, s_min, a_max) and results/e13_choice.csv. A gate file
-configs/recovery/box_gate_<model>.yaml is written only when the choice is a go.
+results/e13_gate_grid.csv (per model, arm, view, s_min, a_max) and results/e13_choice.csv. A gate
+file configs/recovery/box_gate_<model>.yaml is written only when the choice is a go.
+
+Views: `exact` keeps candidates whose own frame is annotated (scored_frame == frame_index); `all`
+keeps every candidate (each scored at the next annotated frame); `first_of_object` keeps the first
+candidate of each object, over all candidates. The choice and the go rule use `exact` only: a box
+at t is scored against the annotation at t, because the next-annotated-frame rule counts correct
+boxes as wrong when the object moves fast. The grid is also written for `all`, for information.
 
 A "re-prompt" is a candidate whose box source returned a box (status ok), that passes the gate and
 then the frozen box check. useful = re-prompt at a real failure with a box of IoU >= 0.5 with the
@@ -18,6 +24,7 @@ restrictive gate. Go only if net > 0 and net > the net of csrt_reinit with no ga
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import sys
 from collections.abc import Sequence
@@ -40,7 +47,9 @@ ARM_ORDER = (
 S_MIN_GRID = (None, 0.2, 0.3, 0.4, 0.5, 0.6)
 A_MAX_GRID = (None, 0.7, 0.5, 0.3)
 GOOD_IOU = 0.5
-VIEWS = ("all", "first_of_object")
+VIEWS = ("exact", "all", "first_of_object")
+GRID_VIEWS = ("exact", "all")
+CHOICE_VIEW = "exact"
 BASELINE_ARM = "csrt_reinit"
 PILOT_COLUMNS = (
     "model",
@@ -63,6 +72,7 @@ PILOT_COLUMNS = (
 GRID_COLUMNS = (
     "model",
     "arm",
+    "view",
     "s_min",
     "a_max",
     "reprompts",
@@ -71,7 +81,18 @@ GRID_COLUMNS = (
     "neutral",
     "net",
 )
-CHOICE_COLUMNS = ("model", "arm", "s_min", "a_max", "reprompts", "net", "baseline_net", "go")
+CHOICE_COLUMNS = (
+    "model",
+    "arm",
+    "view",
+    "s_min",
+    "a_max",
+    "reprompts",
+    "net",
+    "baseline_net",
+    "go",
+    "scored_candidates",
+)
 
 
 def is_vit(arm: str) -> bool:
@@ -80,6 +101,21 @@ def is_vit(arm: str) -> bool:
 
 def share(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else math.nan
+
+
+def exact_rows(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Candidates whose own frame is annotated (scored frame equals the candidate frame)."""
+    scored = pd.to_numeric(candidates["scored_frame"], errors="coerce")
+    frame = pd.to_numeric(candidates["frame_index"], errors="coerce")
+    return candidates[scored.notna() & (scored == frame)]
+
+
+def view_rows(candidates: pd.DataFrame, view: str) -> pd.DataFrame:
+    if view == "exact":
+        return exact_rows(candidates)
+    if view == "first_of_object":
+        return candidates[candidates["first_of_object"].astype(str) == "True"]
+    return candidates
 
 
 def reprompt_mask(table: pd.DataFrame, s_min: float | None, a_max: float | None) -> pd.Series[bool]:
@@ -111,9 +147,7 @@ def pilot_rows(
         seconds = float(timing.loc[timing["arm"] == arm, "seconds"].sum())
         calls = int(timing.loc[timing["arm"] == arm, "calls"].sum())
         for view in VIEWS:
-            part = candidates[candidates["arm"] == arm]
-            if view == "first_of_object":
-                part = part[part["first_of_object"].astype(str) == "True"]
+            part = view_rows(candidates[candidates["arm"] == arm], view)
             real = part[part["cls"] == "real_failure"]
             alarms = part[part["cls"] == "false_alarm"]
             check = part["box_check_ok"].astype(str) == "True"
@@ -147,8 +181,8 @@ _STATUSES = ("ok", "lost", "not_initialised")
 
 def grid_rows(model: str, candidates: pd.DataFrame) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for arm in ARM_ORDER:
-        table = candidates[candidates["arm"] == arm]
+    for arm, view in itertools.product(ARM_ORDER, GRID_VIEWS):
+        table = view_rows(candidates[candidates["arm"] == arm], view)
         for s_min in S_MIN_GRID if is_vit(arm) else (None,):
             for a_max in A_MAX_GRID:
                 useful, harmful, neutral = outcomes(table, s_min, a_max)
@@ -156,6 +190,7 @@ def grid_rows(model: str, candidates: pd.DataFrame) -> list[dict[str, object]]:
                     {
                         "model": model,
                         "arm": arm,
+                        "view": view,
                         "s_min": "off" if s_min is None else s_min,
                         "a_max": "off" if a_max is None else a_max,
                         "reprompts": useful + harmful + neutral,
@@ -172,9 +207,9 @@ def _restriction(row: pd.Series[Any]) -> int:
     return int(row["s_min"] != "off") + int(row["a_max"] != "off")
 
 
-def choose(model: str, grid: pd.DataFrame) -> dict[str, object]:
+def choose(model: str, grid: pd.DataFrame, view: str = CHOICE_VIEW) -> dict[str, object]:
     """The grid row with the highest net; ties by re-prompts, arm order, then fewer gates."""
-    table = grid[grid["model"] == model].copy()
+    table = grid[(grid["model"] == model) & (grid["view"] == view)].copy()
     table["arm_rank"] = table["arm"].map({a: i for i, a in enumerate(ARM_ORDER)})
     table["restriction"] = table.apply(_restriction, axis=1)
     best = table.sort_values(
@@ -187,6 +222,7 @@ def choose(model: str, grid: pd.DataFrame) -> dict[str, object]:
     return {
         "model": model,
         "arm": best["arm"],
+        "view": view,
         "s_min": best["s_min"],
         "a_max": best["a_max"],
         "reprompts": int(best["reprompts"]),
@@ -194,6 +230,11 @@ def choose(model: str, grid: pd.DataFrame) -> dict[str, object]:
         "baseline_net": int(base),
         "go": bool(net > 0 and net > int(base)),
     }
+
+
+def scored_candidates(candidates: pd.DataFrame, arm: object) -> int:
+    part = exact_rows(candidates[candidates["arm"] == arm])
+    return int((part["cls"] != "unscored").sum())
 
 
 def gate_yaml(choice: dict[str, object]) -> str:
@@ -227,12 +268,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"no merged pilot candidates in {args.results_dir}")
     pilot_all: list[dict[str, object]] = []
     grid_all: list[dict[str, object]] = []
+    by_model: dict[str, pd.DataFrame] = {}
     for model in models:
         candidates, timing = inputs_for(args.results_dir, model)
         pilot_all += pilot_rows(model, candidates, timing)
         grid_all += grid_rows(model, candidates)
+        by_model[model] = candidates
     grid = pd.DataFrame(grid_all, columns=list(GRID_COLUMNS))
     choices = [choose(m, grid) for m in models]
+    for choice in choices:
+        table = by_model[str(choice["model"])]
+        choice["scored_candidates"] = scored_candidates(table, choice["arm"])
     pd.DataFrame(pilot_all, columns=list(PILOT_COLUMNS)).to_csv(
         args.results_dir / "e13_pilot.csv", index=False
     )
@@ -245,7 +291,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(
             f"{choice['model']}: {verdict} arm={choice['arm']} s_min={choice['s_min']} "
             f"a_max={choice['a_max']} net={choice['net']} (csrt_reinit ungated "
-            f"{choice['baseline_net']})\n"
+            f"{choice['baseline_net']}) exact_scored_candidates={choice['scored_candidates']}\n"
+        )
+        info = choose(str(choice["model"]), grid, "all")
+        sys.stdout.write(
+            f"  info only, view all would choose arm={info['arm']} s_min={info['s_min']} "
+            f"a_max={info['a_max']} net={info['net']} go={info['go']}\n"
         )
         if choice["go"]:
             sys.stdout.write(f"  wrote {write_gate_file(args.config_dir, choice)}\n")
