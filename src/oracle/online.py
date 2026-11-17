@@ -60,6 +60,9 @@ class OracleBoxSource:
     def observe(self, obj_id: int, frame_index: int, frame: Frame, mask: Mask) -> None:
         self._remember(obj_id, mask)
 
+    def skip(self, obj_id: int, frame_index: int, frame: Frame) -> None:
+        return None
+
     def propose(self, obj_id: int, frame_index: int, frame: Frame) -> TrackResult:
         raw = oracle_box_at(self.video, obj_id, frame_index)
         if raw is None:

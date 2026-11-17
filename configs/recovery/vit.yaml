@@ -1,0 +1,5 @@
+kind: vit_tracker
+model: models/vittrack/object_tracking_vittrack_2023sep.onnx
+sha256: 2990f0b7cd44d92afa48cd97db6de7be113fc1d9594fddb74e2725c10478e91d
+anchor_iou: 0.5
+score_threshold_internal: 0.0

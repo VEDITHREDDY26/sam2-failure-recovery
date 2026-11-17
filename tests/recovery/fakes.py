@@ -140,6 +140,9 @@ class ScriptedBoxes:
     def observe(self, obj_id: int, frame_index: int, frame: Any, mask: Any) -> None:
         self._remember(obj_id, mask)
 
+    def skip(self, obj_id: int, frame_index: int, frame: Any) -> None:
+        return None
+
     def propose(self, obj_id: int, frame_index: int, frame: Any) -> TrackResult:
         self.proposed.append((obj_id, frame_index))
         return self.results[(obj_id, frame_index)]

@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
     p
     for p in (ROOT / "configs" / "recovery").glob("*.yaml")
-    if p.name not in ("box_check.yaml", "recovery.yaml") and not p.name.startswith("verified_")
+    if p.name not in ("box_check.yaml", "recovery.yaml", "vit.yaml")
+    and not p.name.startswith("verified_")
 ) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
 
 

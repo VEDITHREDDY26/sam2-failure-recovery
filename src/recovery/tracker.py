@@ -26,6 +26,7 @@ class TrackResult:
     status: Status
     box: Box | None  # clipped to the frame; None unless status is "ok"
     raw_box: Box | None  # tracker output before clipping (may lie partly outside the frame)
+    score: float | None = None  # tracker confidence when the tracker has one (CSRT has none)
 
 
 def _check_frame(frame: npt.NDArray[np.uint8]) -> None:
