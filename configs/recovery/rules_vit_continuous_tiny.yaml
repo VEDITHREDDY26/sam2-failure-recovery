@@ -1,0 +1,6 @@
+kind: recovery_run
+method: fix_rules_vit_continuous_tiny
+detector: rules
+box_source: vit_continuous
+tracker_mode: ""
+disabled_rules: []
