@@ -123,3 +123,21 @@ def test_every_written_config_loads_and_passes_the_run_checks(
         assert (gate is not None) == isinstance(cfg, GatedRunConfig)
         if gate is not None:
             assert gate.s_min == 0.4 and gate.a_max is None
+
+
+def test_list_names_the_runs_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    choice, config_dir = setup(
+        tmp_path, "tiny,csrt_reinit,off,0.5,5,3,1,True\nlarge,vit_reinit,0.4,off,5,3,1,True\n"
+    )
+    assert (
+        make_configs.main(["--choice", str(choice), "--config-dir", str(config_dir), "--list"]) == 0
+    )
+    lines = [line.split() for line in capsys.readouterr().out.splitlines()]
+    assert [(m, v, Path(p).name, s) for m, v, p, s in lines] == [
+        ("tiny", "a", "rules_csrt_tiny.yaml", "existing"),
+        ("tiny", "b", "rules_gated_csrt_reinit_tiny.yaml", "new"),
+        ("large", "b", "rules_gated_vit_reinit_large.yaml", "new"),
+    ]
+    assert names(config_dir) == []

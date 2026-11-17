@@ -1,6 +1,6 @@
 """Write the E13 test-run configs from the frozen choice of box source and gate.
 
-    python -m experiments.e13.make_configs [--choice results/e13_choice.csv]
+    python -m experiments.e13.make_configs [--choice results/e13_choice.csv] [--list]
 
 Reads results/e13_choice.csv (model, arm, s_min, a_max, net, go; written by experiments.e13.choose)
 and, for every model with go=True, writes the gated run config (fix_gated_rules_<arm>_<model>) that
@@ -8,6 +8,8 @@ points at configs/recovery/box_gate_<model>.yaml, and for Tiny only the ungated 
 (fix_rules_<arm>_tiny). For the CSRT arms the ungated run already exists (E2 reinit, E8 continuous)
 and no config is written; the script says which one stands for it. Nothing is written when the file
 is missing, no model is a go, a gate file is missing, or a config exists with different content.
+--list writes nothing and prints one line per run, "<model> <a|b> <config path> <new|existing>",
+in the order the runs are submitted ("existing" = already run as E2 / E8, not run again).
 """
 
 from __future__ import annotations
@@ -114,6 +116,20 @@ def plan(choice: Path, config_dir: Path) -> dict[Path, str]:
     return files
 
 
+def run_list(choice: Path, config_dir: Path) -> list[tuple[str, str, Path, str]]:
+    """(model, variant, config path, new | existing) for every test run, ungated first."""
+    runs: list[tuple[str, str, Path, str]] = []
+    for model, arm in go_choices(choice):
+        if model in UNGATED_MODELS:
+            if has_own_ungated_config(arm):
+                runs.append((model, "a", config_dir / f"rules_{arm}_{model}.yaml", "new"))
+            else:
+                existing = config_dir / EXISTING_UNGATED[arm].format(model=model)
+                runs.append((model, "a", existing, "existing"))
+        runs.append((model, "b", config_dir / f"rules_gated_{arm}_{model}.yaml", "new"))
+    return runs
+
+
 def check_no_conflict(files: dict[Path, str]) -> None:
     for path, text in files.items():
         if path.is_file() and path.read_text() != text:
@@ -124,8 +140,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--choice", type=Path, default=CHOICE_PATH)
     parser.add_argument("--config-dir", type=Path, default=CONFIG_DIR)
+    parser.add_argument("--list", action="store_true")
     args = parser.parse_args(argv)
     files = plan(args.choice, args.config_dir)
+    if args.list:
+        for model, variant, path, state in run_list(args.choice, args.config_dir):
+            sys.stdout.write(f"{model} {variant} {path} {state}\n")
+        return 0
     check_no_conflict(files)
     for path, text in files.items():
         path.write_text(text)

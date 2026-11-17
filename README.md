@@ -32,7 +32,7 @@ src/detection/   failure labels, rule detector, learned detector, streaming adap
 src/oracle/      ground-truth flags and boxes (oracle runs only, named "oracle")
 src/recovery/    aligned CSRT, box check, recovery module, online runner
 src/eval/        official-scorer wrappers, completeness checks, bootstrap, main table
-experiments/     one package per experiment (e1 ... e12) plus run / tuning helpers
+experiments/     one package per experiment (e1 ... e13) plus run / tuning helpers
 configs/         YAML / JSON settings; configs/detector/ and configs/verify/ are the frozen ones
 scripts/         checkpoint download, demo video
 notebooks/       Colab notebooks
@@ -441,6 +441,58 @@ python -m experiments.e12.false_alarms
 python -m experiments.e12.upper_bound
 python -m experiments.e12.types_outcome --labels results/e10_types_labels.csv
 python -m experiments.e12.figures
+```
+
+### 15. E13 (extension): a stronger re-prompt box
+
+Pilot on SA-V val only (CPU job on cached SAM 2-alone outputs, sharded over videos, then merged;
+Tiny and Large), then the choice of box source and gate per model. DATA for the pilot, MAC for the
+choice (`results/e13_pilot.csv`, `results/e13_gate_grid.csv`, `results/e13_choice.csv`,
+`configs/recovery/box_gate_<model>.yaml` on a go). The ViT tracker model file goes under
+`$SAM2FR_DATA_ROOT/models/vittrack/` (the config `configs/recovery/vit.yaml` pins its sha256).
+
+```
+python -m experiments.e13.pilot --model tiny --shard 0 --nshards 8   # shards 0..7, then:
+python -m experiments.e13.pilot --model tiny --merge                 # same for --model large
+python -m experiments.e13.choose
+```
+
+The run configs are written from the choice, never by hand (a model that is a no-go gets none):
+
+```
+python -m experiments.e13.make_configs
+```
+
+Test runs only after the choice is committed and tagged `box-frozen`. GPU: Tiny on DAVIS val and every
+SA-V test shard, (a) with the chosen box and no gate and (b) with the frozen gate; Large (b) only.
+`make_configs --list` names each run; when the chosen source is CSRT, variant (a) is the existing
+E2 (`rules_csrt_tiny.yaml`) or E8 (`rules_csrt_continuous_tiny.yaml`) run and is not run again. The
+example is for one gated Tiny run; repeat for the other shards and configs:
+
+```
+python -m experiments.e2.run_online --config $CFG/rules_gated_<arm>_tiny.yaml --prompts $PROMPTS/davis_val.json --videos $(cat $LISTS/davis_val_all.txt)
+python -m experiments.e2.run_online --config $CFG/rules_gated_<arm>_tiny.yaml --prompts $PROMPTS/sav_test.json --videos $(cat $LISTS/sav_test_0of4.txt)
+```
+
+DATA: scoring (as step 3), the wrong re-prompt file (as step 9; also run it for
+`rules_csrt_large.yaml`) and the identity check: every video where no re-prompt happened must equal
+SAM 2 alone on every frame, and every video must equal it before its first re-prompt
+(`results/e13_gated_check_<method>_<split>.csv`, exit status 1 on a difference):
+
+```
+python -m experiments.e2.score --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+python -m experiments.e8.wrong_reprompts --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+python -m experiments.e13.check_gated --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+```
+
+MAC: `results/e13.csv` (and `results/e13.tex`) with SAM 2 alone, E2, variant (a), variant (b) and the
+E7 rules + oracle box row (marked oracle), with paired 95% bootstrap intervals against SAM 2 alone and
+against E2, improved / worse / unchanged videos, re-prompts, wrong re-prompts, gated events and FPS;
+and `figures/e13_ladder.png`:
+
+```
+python -m experiments.e13.table
+python -m experiments.e13.figure
 ```
 
 ## Results
