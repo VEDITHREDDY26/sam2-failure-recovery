@@ -210,3 +210,24 @@ def test_real_model_follows_a_moving_square() -> None:
     result = tracker.update(frame_with_square(14))
     assert result.status == "ok" and result.box is not None and result.score is not None
     assert abs(result.box.x0 - 14) <= 6 and abs(result.box.y0 - 30) <= 6
+
+
+def test_anchored_restarts_a_lost_or_unstarted_tracker_on_a_non_empty_mask() -> None:
+    source = make_source("anchored")
+    source.start(1, 0, BLANK, np.zeros((H, W), dtype=bool))  # never started
+    source.observe(1, 1, BLANK, mask_for(10))
+    assert total("inits") == 1
+    FakeViT.created[-1].found = False
+    source.observe(1, 2, BLANK, mask_for(12))  # lost: restart
+    assert total("inits") == 2
+    FakeViT.created[-1].found = False
+    source.observe(1, 3, BLANK, np.zeros((H, W), dtype=bool))  # lost + empty: no restart
+    assert total("inits") == 2
+
+
+def test_continuous_never_restarts_a_lost_tracker() -> None:
+    source = make_source("continuous")
+    source.start(1, 0, BLANK, mask_for(10))
+    FakeViT.created[-1].found = False
+    source.observe(1, 1, BLANK, mask_for(12))
+    assert total("inits") == 1

@@ -121,7 +121,8 @@ class ViTBoxSource:
     reinit: restart on every unflagged mask. continuous: restart only at start and after a
     recovery; the tracker is updated on every frame, flagged ones inside the cooldown included.
     anchored: continuous, but an unflagged frame also restarts the tracker on SAM 2's mask box
-    when the tracker's own box overlaps it by at least anchor_iou.
+    when the tracker's own box overlaps it by at least anchor_iou, or when the tracker has no box
+    (lost or not started); an empty mask never restarts it. continuous never restarts.
     """
 
     def __init__(self, factory: ViTFactory, mode: str = "reinit", anchor_iou: float = 0.5) -> None:
@@ -147,10 +148,9 @@ class ViTBoxSource:
             tracker.reinit(frame, mask, frame_index)
         else:
             result = tracker.update(frame)
-            agrees = result.box is not None and (
-                box_iou(result.box, box_from_mask(mask)) >= self.anchor_iou
-            )
-            if self.mode == "anchored" and agrees:
+            if self.mode == "anchored" and (
+                result.box is None or box_iou(result.box, box_from_mask(mask)) >= self.anchor_iou
+            ):
                 tracker.reinit(frame, mask, frame_index)
         self._remember(obj_id, mask)
 
