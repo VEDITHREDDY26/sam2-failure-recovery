@@ -102,7 +102,7 @@ class ViTTracker:
     def reinit(
         self, frame_bgr: npt.NDArray[np.uint8], mask: npt.NDArray[np.bool_], frame_idx: int
     ) -> ReinitStatus:
-        """Restart on the box of a reliable mask, in place on the one tracker (the model loads once).
+        """Restart on the box of a reliable mask, in place on the one tracker.
 
         An empty mask or a refused box keeps the state.
         """
