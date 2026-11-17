@@ -11,7 +11,10 @@ over objects with a 95% bootstrap interval over videos (seed 5415, 10,000 resamp
 against SAM 2 alone and against E2 are paired on the same objects. Improved / worse / unchanged
 videos use the main-table rule; worse videos are kept. Re-prompts and gated events come from the
 events files, wrong re-prompts (IoU < 0.5 at the re-prompted frame) from the _reprompts files, FPS
-from the timing files as in the main table. Nothing is written unless every input exists.
+from the timing files as in the main table. The exact columns (reprompts_exact, wrong_exact) count
+only the re-prompts whose own frame is annotated and how many of those are wrong, so they do not
+depend on the next annotated frame used by the wrong-re-prompt rule on SA-V.
+Nothing is written unless every input exists.
 """
 
 from __future__ import annotations
@@ -61,6 +64,8 @@ TABLE_COLUMNS = (
     "videos_unchanged",
     "reprompts",
     "wrong_reprompts",
+    "reprompts_exact",
+    "wrong_exact",
     "unscored_reprompts",
     "gated",
     "gated_low_score",
@@ -174,8 +179,11 @@ def _fill_events(row: dict[str, object], events: pd.DataFrame) -> None:
 def _fill_wrong(row: dict[str, object], reprompts: pd.DataFrame, events: pd.DataFrame) -> None:
     if len(reprompts) != int((events["action"] == "reprompted").sum()):
         raise E13TableError(f"{row['method']}/{row['split']}: re-prompt file and events disagree")
+    exact = reprompts["gt_frame_index"] == reprompts["frame_index"]
     row |= {
         "wrong_reprompts": int((reprompts["wrong"] == True).sum()),  # noqa: E712
+        "reprompts_exact": int(exact.sum()),
+        "wrong_exact": int((exact & (reprompts["wrong"] == True)).sum()),  # noqa: E712
         "unscored_reprompts": int(reprompts["wrong"].isna().sum()),
     }
 
@@ -248,10 +256,12 @@ def _cells(row: dict[str, str]) -> list[str]:
     if row["videos_improved"] != "":
         counts = f"{row['videos_improved']} / {row['videos_worse']} / {row['videos_unchanged']}"
     wrong = f"{row['reprompts']} ({row['wrong_reprompts'] or '--'})" if row["reprompts"] else "--"
+    exact = f"{row['reprompts_exact']} ({row['wrong_exact']})" if row["reprompts_exact"] else "--"
     return [
         _interval(row, "delta_JF", "delta_low", "delta_high"),
         counts,
         wrong,
+        exact,
         f"{float(row['fps']):.2f}",
     ]
 
@@ -260,14 +270,20 @@ def latex_table(rows: Sequence[dict[str, str]]) -> str:
     keys = list(dict.fromkeys((r["model"], r["method"]) for r in rows))
     by_key = {(r["model"], r["method"], r["split"]): r for r in rows}
     splits = [s for s in TEST_SETS if any(r["split"] == s for r in rows)]
-    head = " & ".join(rf"\multicolumn{{4}}{{c}}{{{SET_TITLES[s]}}}" for s in splits)
+    head = " & ".join(rf"\multicolumn{{5}}{{c}}{{{SET_TITLES[s]}}}" for s in splits)
     lines = [
-        r"\begin{tabular}{ll" + "cccr" * len(splits) + "}",
+        r"\begin{tabular}{ll" + "ccccr" * len(splits) + "}",
         r"\toprule",
         f"Model & Method & {head} " + r"\\",
         " & & "
         + " & ".join(
-            [r"$\Delta$ J\&F vs alone", "better / worse / same", "re-prompts (wrong)", "FPS"]
+            [
+                r"$\Delta$ J\&F vs alone",
+                "better / worse / same",
+                "re-prompts (wrong)",
+                "at annotated (wrong)",
+                "FPS",
+            ]
             * len(splits)
         )
         + r" \\",

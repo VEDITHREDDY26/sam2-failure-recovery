@@ -46,7 +46,7 @@ def write_method(results: Path, kind: str, model: str, split: str, reprompt_file
         results / f"events_{name}.csv", index=False
     )
     if reprompt_file:
-        data = [("a", 1, 0, 0, 0.4, True), ("a", 1, 1, 1, 0.9, False)]
+        data = [("a", 1, 0, 1, 0.4, True), ("a", 1, 1, 1, 0.9, False)]
         pd.DataFrame(
             data,
             columns=["video", "object_id", "frame_index", "gt_frame_index", "iou_after", "wrong"],
@@ -112,6 +112,8 @@ def test_table_rows_values_and_columns(tmp_path: Path) -> None:
     assert tiny.loc["e2", "videos_worse"] == 2 and tiny.loc["e2", "videos_unchanged"] == 2
     assert tiny.loc["variant_a", "videos_worse"] == 1
     assert tiny.loc["variant_b", "reprompts"] == 2 and tiny.loc["variant_b", "wrong_reprompts"] == 1
+    assert tiny.loc["variant_b", "reprompts_exact"] == 1
+    assert tiny.loc["variant_b", "wrong_exact"] == 0
     assert tiny.loc["variant_b", "gated"] == 2
     assert tiny.loc["variant_b", "gated_low_score"] == 1
     assert tiny.loc["variant_b", "gated_agrees_with_sam2"] == 1
@@ -147,7 +149,8 @@ def test_large_has_alone_e2_and_gated_only(tmp_path: Path) -> None:
     large = pd.read_csv(out).query("model == 'large' and split == 'sav_test'")
     assert list(large["role"]) == ["alone", "e2", "variant_b"]
     e2 = large.set_index("role").loc["e2"]
-    assert pd.isna(e2["wrong_reprompts"]) and e2["reprompts"] == 2
+    assert pd.isna(e2["wrong_reprompts"]) and pd.isna(e2["wrong_exact"])
+    assert pd.isna(e2["reprompts_exact"]) and e2["reprompts"] == 2
 
 
 def test_csrt_reinit_choice_reuses_e2_as_variant_a(tmp_path: Path) -> None:
