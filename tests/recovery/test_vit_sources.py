@@ -73,6 +73,19 @@ def test_wrapper_reports_box_and_score_and_converts_xywh() -> None:
     assert (result.status, result.box, result.score) == ("ok", Box(10, 30, 34, 54), 0.7)
 
 
+def test_reinit_reuses_one_tracker_in_place() -> None:
+    made: list[FakeViT] = []
+
+    def factory() -> FakeViT:
+        made.append(FakeViT())
+        return made[-1]
+
+    tracker = ViTTracker(factory)
+    for index in range(3):
+        tracker.reinit(BLANK, mask_for(10 + index), index)
+    assert len(made) == 1 and len(made[0].inits) == 3
+
+
 def test_wrapper_init_failure_and_empty_mask_keep_state() -> None:
     fake = FakeViT()
     tracker = ViTTracker(lambda: fake)
@@ -231,3 +244,21 @@ def test_continuous_never_restarts_a_lost_tracker() -> None:
     FakeViT.created[-1].found = False
     source.observe(1, 1, BLANK, mask_for(12))
     assert total("inits") == 1
+
+
+def test_real_model_in_place_reinit_equals_a_fresh_tracker() -> None:
+    root = os.environ.get("SAM2FR_DATA_ROOT", "")
+    cfg = load_vit_config()
+    if not root or not (Path(root) / cfg.model).is_file():
+        pytest.skip("ViT model file not present under SAM2FR_DATA_ROOT")
+    factory = make_vit_factory(cfg, Path(root))
+    reused = ViTTracker(factory)
+    reused.reinit(frame_with_square(60), mask_for(60), 0)
+    reused.update(frame_with_square(62))
+    for offset in (10, 16):
+        reused.reinit(frame_with_square(offset), mask_for(offset), 0)
+        fresh = ViTTracker(factory)
+        fresh.reinit(frame_with_square(offset), mask_for(offset), 0)
+        for step in range(1, 5):
+            frame = frame_with_square(offset + 2 * step)
+            assert reused.update(frame) == fresh.update(frame)

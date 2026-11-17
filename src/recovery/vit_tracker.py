@@ -102,12 +102,15 @@ class ViTTracker:
     def reinit(
         self, frame_bgr: npt.NDArray[np.uint8], mask: npt.NDArray[np.bool_], frame_idx: int
     ) -> ReinitStatus:
-        """Restart on the box of a reliable mask; an empty mask or a refused box keeps the state."""
+        """Restart on the box of a reliable mask, in place on the one tracker (the model loads once).
+
+        An empty mask or a refused box keeps the state.
+        """
         _check_frame(frame_bgr)
         box = box_from_mask(mask)
         if box is None:
             return "empty_mask"
-        tracker = self._factory()
+        tracker = self._tracker if self._tracker is not None else self._factory()
         try:
             tracker.init(frame_bgr, to_xywh(box))
         except cv2.error:
