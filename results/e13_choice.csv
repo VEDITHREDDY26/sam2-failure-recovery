@@ -1,0 +1,3 @@
+model,arm,view,s_min,a_max,reprompts,net,baseline_net,go,scored_candidates
+tiny,vit_continuous,exact,0.6,off,6,2,-203,True,469
+large,vit_continuous,exact,0.6,off,14,8,-207,True,430
