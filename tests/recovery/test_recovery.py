@@ -8,6 +8,7 @@ import pytest
 from src.common.boxes import Box
 from src.recovery.box_check import BoxCheck
 from src.recovery.events import EVENT_COLUMNS, Event
+from src.recovery.gate import BoxGate
 from src.recovery.recovery import RecoveryRun
 from src.recovery.settings import RecoverySettings
 from src.recovery.sources import CSRTBoxSource
@@ -53,9 +54,12 @@ def execute(
     prompts: dict[int, Box] | None = None,
     cooldown: int = 12,
     start: int = 0,
+    gate: BoxGate | None = None,
 ) -> tuple[list[Event], Collector, StatefulFake]:
     predictor = StatefulFake()
-    run = RecoveryRun(predictor, detector, boxes, BoxCheck(), RecoverySettings(cooldown, "reinit"))
+    run = RecoveryRun(
+        predictor, detector, boxes, BoxCheck(), RecoverySettings(cooldown, "reinit"), gate=gate
+    )
     sink = Collector()
     events = run.run(
         "vid", "frames", NUM_FRAMES, read_frame, prompts or {1: START_BOX}, start, sink

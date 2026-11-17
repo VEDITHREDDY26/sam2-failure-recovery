@@ -3,8 +3,10 @@
     python -m experiments.e2.run_online --config configs/recovery/rules_csrt_tiny.yaml \
         --prompts prompts/davis_val.json [--videos a b] [--device cuda] [--offload-video]
 
-Real system only: oracle configs are refused. A verified config (fix_verified_*) additionally
-needs the frozen configs/verify/verify.yaml and runs on davis_val or sav_test only.
+Real system only: oracle configs are refused. A gated config (fix_gated_*) names a gate file
+that decides which proposed boxes are used; without one the run is the plain E2 system. A
+verified config (fix_verified_*) additionally needs the frozen configs/verify/verify.yaml and
+runs on davis_val or sav_test only.
 --log-candidates (accept-all runs on sav_val only) writes the per-candidate feature log used to
 tune the verification rule; it does not change the run. The rule thresholds must have been frozen
 (configs/detector/rules.yaml); without that file nothing runs. Outputs go under
@@ -23,7 +25,14 @@ from src.common.config import DATA_ROOT_ENV, ConfigError
 from src.detection.online import OnlineRuleDetector
 from src.detection.rules import DEFAULT_RULES_PATH
 from src.recovery.box_check import BoxCheck, load_box_check_config
-from src.recovery.config import RecoveryRunConfig, VerifiedRunConfig, load_recovery_config
+from src.recovery.build import make_box_source
+from src.recovery.config import (
+    GatedRunConfig,
+    RecoveryRunConfig,
+    VerifiedRunConfig,
+    load_recovery_config,
+)
+from src.recovery.gate import BoxGate, load_box_gate
 from src.recovery.online_runner import check_online_method, run_batch
 from src.recovery.settings import CONFIG_PATH, load_recovery_settings
 from src.recovery.sources import CSRTBoxSource
@@ -60,6 +69,15 @@ def choose_verifier(
         raise SystemExit(str(exc)) from exc
 
 
+def choose_gate(run_cfg: RecoveryRunConfig) -> BoxGate | None:
+    if not isinstance(run_cfg, GatedRunConfig):
+        return None
+    try:
+        return load_box_gate(run_cfg.gate_path()).gate()
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
@@ -70,10 +88,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--log-candidates", action="store_true")
     args = parser.parse_args(argv)
     run_cfg = load_recovery_config(args.config)
-    if run_cfg.detector != "rules" or run_cfg.box_source != "csrt":
+    if run_cfg.detector != "rules" or run_cfg.box_source == "oracle":
         raise SystemExit(
-            f"{args.config}: run_online is the real system only (rules + csrt); oracle runs "
-            "have their own entry script"
+            f"{args.config}: run_online is the real system only (rules detector, no oracle "
+            "box); oracle runs have their own entry script"
         )
     check_online_method(run_cfg.method)
     if not DEFAULT_RULES_PATH.is_file():
@@ -95,13 +113,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         lambda video: OnlineRuleDetector.from_config(
             model, DEFAULT_RULES_PATH, run_cfg.enabled_rules
         ),
-        lambda video: CSRTBoxSource(settings.tracker_mode),
+        (
+            (lambda video: CSRTBoxSource(settings.tracker_mode))
+            if run_cfg.box_source == "csrt"
+            else make_box_source(run_cfg, settings)
+        ),
         BoxCheck(load_box_check_config()),
         settings,
         args.videos,
         args.offload_video,
         verifier,
         args.log_candidates,
+        choose_gate(run_cfg),
     )
 
 

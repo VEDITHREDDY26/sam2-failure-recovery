@@ -7,7 +7,7 @@ from typing import Literal
 
 from src.common.boxes import Box
 
-Action = Literal["reprompted", "rejected", "tracker_lost", "cooldown", "verify_rejected"]
+Action = Literal["reprompted", "rejected", "tracker_lost", "cooldown", "verify_rejected", "gated"]
 EVENT_COLUMNS = (
     "video",
     "object_id",

@@ -32,6 +32,7 @@ from src.common.masks import masks_to_label_map, write_label_map
 from src.common.signals import SIGNAL_COLUMNS, read_signals, write_signals
 from src.recovery.box_check import BoxCheck
 from src.recovery.events import EVENT_COLUMNS, Event
+from src.recovery.gate import BoxGate
 from src.recovery.recovery import Logits, RecoveryRun
 from src.recovery.settings import RecoverySettings
 from src.recovery.sources import BoxSource, Detector, Frame
@@ -267,6 +268,7 @@ def run_video(
     offload_video: bool = False,
     verifier: VerifyThresholds | None = None,
     log_candidates: bool = False,
+    gate: BoxGate | None = None,
 ) -> OnlineResult:
     """Run one video; PNGs as frames arrive, then timing, events and (last) the signal CSV."""
     check_online_method(method)
@@ -290,7 +292,7 @@ def run_video(
         reading[0] += time.perf_counter() - tick
         return frame
 
-    run = RecoveryRun(timed, detector, boxes, box_check, settings, verifier, log_candidates)
+    run = RecoveryRun(timed, detector, boxes, box_check, settings, verifier, log_candidates, gate)
     loop_start = time.perf_counter()
     events = run.run(
         video, str(frames_dir), len(stems), read_frame, prompts.boxes, start, sink, offload_video
@@ -326,6 +328,7 @@ def run_batch(
     offload_video: bool = False,
     verifier: VerifyThresholds | None = None,
     log_candidates: bool = False,
+    gate: BoxGate | None = None,
 ) -> tuple[int, int]:
     """Run every selected video that is not complete; return (run, skipped)."""
     check_online_method(method)
@@ -369,6 +372,7 @@ def run_batch(
             offload_video,
             verifier,
             log_candidates,
+            gate,
         )
         recovered = sum(1 for e in result.events if e.action == "reprompted")
         print(
