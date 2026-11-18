@@ -55,7 +55,11 @@ def check_output_path(out: Path) -> Path:
 
 
 def _text(image: Image, lines: Sequence[str], top: int = 18, scale: float = 0.5) -> None:
-    """Write white text lines onto the BGR image in place, 18 pixels apart from the left edge."""
+    """Write white text lines onto the BGR image in place.
+
+    Lines are 18 pixels apart vertically, the first one `top` pixels from the top edge, all 6
+    pixels from the left edge.
+    """
     for i, line in enumerate(lines):
         cv2.putText(
             image, line, (6, top + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1

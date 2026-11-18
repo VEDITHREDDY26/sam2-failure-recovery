@@ -410,7 +410,6 @@ class RecoveryRun:
 
     @staticmethod
     def _mark_rejected(events: list[Event], obj_id: int, index: int, reason: str) -> None:
-        # Search from the newest event backwards.
         """Change the object's "reprompted" event at this frame into "verify_rejected".
 
         Args:
@@ -422,6 +421,7 @@ class RecoveryRun:
         Raises:
             RuntimeError: If there is no matching re-prompt event.
         """
+        # Search from the newest event backwards.
         for position in range(len(events) - 1, -1, -1):
             event = events[position]
             if (event.object_id, event.frame_index, event.action) == (obj_id, index, "reprompted"):

@@ -168,8 +168,6 @@ def figure_title(row: pd.Series) -> str:
 
 
 def render_figure(row: pd.Series, clip: ClipFrame, path: Path) -> Path:
-    # Oracle runs are labelled as such in the panel title; a missing ground truth gives a black
-    # panel.
     """Draw the three panels (alone, with fix, ground truth) and save them as one image.
 
     Args:
@@ -180,6 +178,8 @@ def render_figure(row: pd.Series, clip: ClipFrame, path: Path) -> Path:
     Returns:
         The path that was written.
     """
+    # Oracle runs are labelled as such in the panel title; a missing ground truth gives a black
+    # panel.
     fix_name = f"{ORACLE_TAG} {row['fix_method']}" if is_oracle_row(row) else str(row["fix_method"])
     gt_panel: Any = (
         overlay_mask(clip.frame, clip.gt) if clip.gt is not None else np.zeros_like(clip.frame)

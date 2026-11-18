@@ -116,8 +116,8 @@ def load_scores(path: Path) -> list[ScoreRow]:
         The score rows.
 
     Raises:
-        TableError: If the file is missing, empty, has a duplicate (video, object) or a score
-            outside [0, 1].
+        TableError: If the file is missing, empty, has a duplicate (video, object) or a J or F
+            score that is NaN or outside [0, 1] (J&F is their mean, so it is not checked).
     """
     rows = read_scores_csv(_require(path))
     if not rows:

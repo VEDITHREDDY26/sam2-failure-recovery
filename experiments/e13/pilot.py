@@ -192,8 +192,8 @@ def classify(video: VideoSample, obj_id: int, t: int, labels: Callable[[int], La
     if gt is None:
         return Truth(None, None, None, None, "unscored")
     frame = later[0]
-    # If the object is absent in the ground truth the frame is not scored; otherwise a low IoU
-    # with SAM 2 means a real failure.
+    # No annotated frame left gives "unscored" (above). An annotated frame where the object is
+    # absent gives "not_visible"; otherwise a low IoU with SAM 2 means a real failure.
     visible = bool(gt.any())
     iou = mask_iou(labels(frame) == obj_id, gt)
     if not visible:

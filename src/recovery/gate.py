@@ -25,8 +25,8 @@ class BoxGate:
 
     Attributes:
         s_min: Minimum tracker score; None switches the test off.
-        a_max: Maximum IoU between the proposed box and SAM 2's own mask box (above it the
-            tracker adds nothing new); None switches the test off.
+        a_max: IoU between the proposed box and SAM 2's own mask box at or above which the
+            re-prompt is blocked (the tracker adds nothing new); None switches the test off.
     """
 
     s_min: float | None = None

@@ -25,7 +25,6 @@ def read_table(path: Path) -> list[dict[str, str]]:
 
 
 def plot_jf_fps(table_path: Path, figure_dir: Path) -> Path:
-    # Keep first-seen order of test sets and methods so groups and colours are stable.
     """Draw the grouped J&F bar chart with FPS labels and save it as a PNG.
 
     Args:
@@ -35,6 +34,7 @@ def plot_jf_fps(table_path: Path, figure_dir: Path) -> Path:
     Returns:
         Path of the saved figure file.
     """
+    # Keep first-seen order of test sets and methods so groups and colours are stable.
     rows = read_table(table_path)
     test_sets = list(dict.fromkeys(r["test_set"] for r in rows))
     methods = list(dict.fromkeys(r["method"] for r in rows))

@@ -180,8 +180,9 @@ class TimedPredictor:
         Args:
             inference_state: SAM 2 inference state.
             start_frame_idx: 0-based frame to start from.
-            max_frame_num_to_track: Number of frames to track; set only for the replay of frames
-                before a recovered frame, which is therefore timed.
+            max_frame_num_to_track: How many frames to track after start_frame_idx (so this many
+                plus one frames in total, counting the start frame); set only for the replay of
+                frames before a recovered frame, which is therefore timed.
             reverse: Propagate backwards.
 
         Returns:
