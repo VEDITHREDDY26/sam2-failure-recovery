@@ -1,3 +1,5 @@
+"""Shared pytest fixtures; provides the tiny synthetic video used by tests that need frames."""
+
 from pathlib import Path
 
 import pytest

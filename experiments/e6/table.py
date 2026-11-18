@@ -54,6 +54,11 @@ DEFAULT_OUT = "results/e6.csv"
 
 
 def load_failure_stats(path: Path) -> pd.DataFrame:
+    """Read the failure statistics CSV and check its columns.
+
+    Raises:
+        E2Error: If the file is missing or lacks a required column.
+    """
     if not path.is_file():
         raise E2Error(f"missing input file: {path}")
     stats = pd.read_csv(path)
@@ -64,6 +69,11 @@ def load_failure_stats(path: Path) -> pd.DataFrame:
 
 
 def stats_row(stats: pd.DataFrame, model: str, split: str) -> pd.Series:
+    """Pick the single failure-statistics row of one model and split.
+
+    Raises:
+        E2Error: If there is not exactly one matching row.
+    """
     rows = stats[(stats["model"] == model) & (stats["split"] == split)]
     if len(rows) != 1:
         raise E2Error(f"failure_stats.csv has {len(rows)} rows for {model}/{split}, expected 1")
@@ -73,6 +83,20 @@ def stats_row(stats: pd.DataFrame, model: str, split: str) -> pd.Series:
 def build_table(
     results_dir: Path, models: Sequence[str] = MODELS, splits: Sequence[str] = TEST_SETS
 ) -> list[dict[str, object]]:
+    """Build the E6 rows: SAM 2 alone vs with the fix, per model and test set.
+
+    Args:
+        results_dir: Folder with the E2 score CSVs, the frames CSVs and failure_stats.csv.
+        models: Model names to include (tiny, large).
+        splits: Test sets to include.
+
+    Returns:
+        One row per (model, split) with the columns in TABLE_COLUMNS.
+
+    Raises:
+        E2Error: If an input is missing or invalid, or the two runs scored different objects.
+    """
+    # Failure counts are shared by all rows; per-run scores are loaded inside the loop.
     stats = load_failure_stats(results_dir / "failure_stats.csv")
     out: list[dict[str, object]] = []
     for model in models:
@@ -81,11 +105,14 @@ def build_table(
             alone = load_scores(results_dir / f"{alone_method(model)}_{split}.csv")
             fix_name = f"{fix_method(model)}_{split}"
             fix = load_scores(results_dir / f"{fix_name}.csv")
+            # Both runs must cover the same objects for the gain to be a fair difference.
             if {(r.video, r.object) for r in alone} != {(r.video, r.object) for r in fix}:
                 raise E2Error(f"{label}: SAM 2 alone and the fix score different videos or objects")
             frames = load_frames(results_dir / f"{fix_name}_frames.csv")
             stat = stats_row(stats, model, split)
             alone_jf = per_video_jf(alone)
+            # Per-video J&F is compared with the same threshold as E2; gain is the difference of
+            # means.
             improved, worse, unchanged = count_changes(alone_jf, per_video_jf(fix))
             base, new = means(alone)["J&F"], means(fix)["J&F"]
             out.append(
@@ -110,6 +137,15 @@ def build_table(
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the table to a CSV file with the fixed column order.
+
+    The file is written to a temporary name and then renamed, so a crash never leaves a
+    half-written table. Floats are written with repr to keep full precision.
+
+    Args:
+        path: Output CSV path; parent folders are created.
+        table: Rows as produced by build_table.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -123,6 +159,15 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: build the E6 table CSV.
+
+    Reads the E2 result CSVs and failure_stats.csv from --results-dir (default results) for the
+    chosen --models and --splits, and writes the table to --out (default results/e6.csv).
+    Exits with status 0 on success; invalid input raises E2Error and exits non-zero.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--out", default=DEFAULT_OUT)

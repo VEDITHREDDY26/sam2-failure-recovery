@@ -1,3 +1,7 @@
+"""Tests for the box sanity check: accepts a close box and rejects none, out of frame,
+too small, too large and bad aspect boxes.
+"""
+
 import dataclasses
 from pathlib import Path
 

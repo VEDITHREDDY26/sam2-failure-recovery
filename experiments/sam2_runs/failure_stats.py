@@ -50,6 +50,21 @@ COLUMNS = (
 def summarise(
     model: str, split: str, labels: pd.DataFrame, videos: int, skipped: int
 ) -> dict[str, object]:
+    """Summarise the failure labels of one model and split in one row.
+
+    Args:
+        model: "tiny" or "large".
+        split: Split name.
+        labels: Per-frame label table from video_labels (columns video, object_id, frame_index,
+            iou, failure), all videos of the split concatenated.
+        videos: Number of videos in the split.
+        skipped: Number of objects left out because they are never visible.
+
+    Returns:
+        Dict keyed by COLUMNS. failure_rate is failure frames over labelled frames (NaN if there
+        are no labelled frames); objects counts objects with at least one labelled frame.
+    """
+    # Count failures per frame, then per object and per video that has at least one.
     failures = labels[labels["failure"]]
     frames = len(labels)
     return {
@@ -70,6 +85,7 @@ def stats_for_run(
     model: str, split: str, prefix: str, subset_file: Path
 ) -> dict[str, object] | None:
     """Summary row for one run, or None (after saying why) if the run is incomplete."""
+    # Refuse incomplete runs: failure counts from partial output would be misleading.
     cfg = load_data_config()
     method = validate_method(f"{prefix}_{model}")
     check = check_run(cfg, method, split, subset_file)
@@ -82,6 +98,7 @@ def stats_for_run(
     names = split_videos(cfg, split, subset_file)
     parts = []
     skipped = 0
+    # Label every video against its ground truth and count skipped objects.
     for name in names:
         video = load_video(cfg, split, name)
         skipped += count_skipped_objects(video)
@@ -91,6 +108,12 @@ def stats_for_run(
 
 
 def write_atomic(frame: pd.DataFrame, out: Path) -> None:
+    """Write a table as CSV through a temporary file, creating the folder if needed.
+
+    Args:
+        frame: Table to write.
+        out: Destination CSV.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".tmp")
     frame.to_csv(tmp, index=False)
@@ -98,6 +121,21 @@ def write_atomic(frame: pd.DataFrame, out: Path) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point: write the failure-count table for the finished runs.
+
+    Writes one row per model and split to --out and prints the table. Nothing is written if any
+    run is incomplete.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if any run is incomplete.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments or when the data-root environment
+            variable is not set.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--splits", nargs="+", choices=SPLIT_NAMES, default=list(SPLIT_NAMES))
@@ -107,6 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Collect one row per model and split; all runs must succeed to write the file.
     rows = []
     for model in args.models:
         for split in args.splits:

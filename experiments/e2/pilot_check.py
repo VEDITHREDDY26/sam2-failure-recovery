@@ -38,6 +38,18 @@ DEFAULT_OUT = Path("results/events_pilot.csv")
 
 @dataclass(frozen=True)
 class VideoCheck:
+    """Verdict of the identity check for one video.
+
+    Attributes:
+        video: Video name.
+        frames: Number of frames of the video.
+        first_reprompt: Frame index of the first re-prompt, or None if there was none.
+        compared: Number of frames compared (all matching frames when identical, else the index
+            of the first problem).
+        verdict: "identical", "differs" or "missing_mask".
+        first_diff: Frame index of the first differing or missing mask, or None.
+    """
+
     video: str
     frames: int
     first_reprompt: int | None
@@ -47,15 +59,31 @@ class VideoCheck:
 
     @property
     def ok(self) -> bool:
+        """True if every compared frame is identical to the cached SAM 2 alone mask."""
         return self.verdict == "identical"
 
     def as_row(self) -> tuple[object, ...]:
+        """Return the check as a row of the per-video verdict CSV (None shown as empty)."""
         first = "" if self.first_reprompt is None else self.first_reprompt
         diff = "" if self.first_diff is None else self.first_diff
         return (self.video, self.frames, first, self.compared, self.verdict, diff)
 
 
 def read_events(output_root: Path, method: str, split: str, video: str) -> pd.DataFrame:
+    """Read the events file of one video of a run.
+
+    Args:
+        output_root: Root folder that holds all run outputs.
+        method: Method name of the run.
+        split: Split name.
+        video: Video name.
+
+    Returns:
+        The events table.
+
+    Raises:
+        FileNotFoundError: If the events file does not exist.
+    """
     path = events_path(output_root, method, split, video)
     if not path.is_file():
         raise FileNotFoundError(f"{path} missing: run the online runner first")
@@ -63,6 +91,14 @@ def read_events(output_root: Path, method: str, split: str, video: str) -> pd.Da
 
 
 def first_reprompt(events: pd.DataFrame) -> int | None:
+    """Find the first frame at which the run re-prompted SAM 2.
+
+    Args:
+        events: Events table of one video.
+
+    Returns:
+        The smallest frame index among "reprompted" events, or None if there are none.
+    """
     frames = events.loc[events["action"] == "reprompted", "frame_index"]
     return int(frames.min()) if len(frames) else None
 
@@ -70,8 +106,29 @@ def first_reprompt(events: pd.DataFrame) -> int | None:
 def check_video(
     output_root: Path, method: str, reference: str, split: str, video: str, stems: Sequence[str]
 ) -> VideoCheck:
+    """Compare a run's masks with the cached SAM 2 alone masks before the first re-prompt.
+
+    Recovery re-prompts the live predictor, so frames before the first re-prompt must equal
+    SAM 2 alone exactly (every frame if the run never re-prompted).
+
+    Args:
+        output_root: Root folder that holds all run outputs.
+        method: Method name of the run being checked.
+        reference: Method name of the SAM 2 alone run.
+        split: Split name.
+        video: Video name.
+        stems: Frame file stems in frame order.
+
+    Returns:
+        The verdict; it stops at the first missing or different mask.
+
+    Raises:
+        FileNotFoundError: If the run's events file is missing.
+    """
     first = first_reprompt(read_events(output_root, method, split, video))
+    # Only frames before the first re-prompt are compared; later frames may legitimately differ.
     limit = len(stems) if first is None else first
+    # Compare the run's label map with the cached one frame by frame.
     for index in range(limit):
         ours = mask_path(output_root, method, split, video, stems[index])
         cached = mask_path(output_root, reference, split, video, stems[index])
@@ -83,8 +140,19 @@ def check_video(
 
 
 def write_tables(out: Path, events: pd.DataFrame, checks: Sequence[VideoCheck]) -> Path:
+    """Write the event table and the per-video verdict table.
+
+    Args:
+        out: Path for the combined events CSV; its folder is created if needed.
+        events: Events of all checked videos.
+        checks: One verdict per video.
+
+    Returns:
+        The path of the verdict CSV, which is <out stem>_check.csv next to out.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
     events.to_csv(out, index=False, columns=list(EVENT_COLUMNS))
+    # Verdicts go to a second file named after the first.
     summary = out.with_name(out.stem + "_check.csv")
     rows = [c.as_row() for c in checks]
     pd.DataFrame(rows, columns=list(CHECK_COLUMNS)).to_csv(summary, index=False)
@@ -92,6 +160,18 @@ def write_tables(out: Path, events: pd.DataFrame, checks: Sequence[VideoCheck]) 
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Check an online run against SAM 2 alone (command line).
+
+    Reads the run config, the prompts file, the events files and the cached label maps. Writes
+    --out (events of the checked videos) and the verdict CSV next to it, and prints one line per
+    video. Needs the data-root environment variable.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 if every video is identical before its first re-prompt, 1 otherwise.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--prompts", type=Path, required=True)
@@ -100,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # The reference run is the cached SAM 2 alone run of the same model size.
     run_cfg = load_recovery_config(args.config)
     reference = f"sam2_{model_of(run_cfg)}"
     data = load_data_config()
@@ -108,12 +189,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_root = data.data_root / data.output_root
     checks: list[VideoCheck] = []
     tables: list[pd.DataFrame] = []
+    # Check each video and collect its events for the combined table.
     for video in names:
         stems = [p.stem for p in frame_paths(frames_dir_for(data, prompts.split, video))]
         checks.append(
             check_video(output_root, run_cfg.method, reference, prompts.split, video, stems)
         )
         tables.append(read_events(output_root, run_cfg.method, prompts.split, video))
+    # Combine the events of all videos, write both tables, then report per video.
     events = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(columns=EVENT_COLUMNS)
     summary = write_tables(args.out, events, checks)
     for check in checks:

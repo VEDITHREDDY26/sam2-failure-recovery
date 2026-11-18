@@ -1,3 +1,7 @@
+"""Tests for exporting SA-V val labels and boxes: labels match masks, empty masks give empty
+cells, incomplete runs refused and part files reused on resume.
+"""
+
 from pathlib import Path
 
 import numpy as np

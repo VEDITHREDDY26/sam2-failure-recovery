@@ -1,3 +1,5 @@
+"""Tests for the analysis figures: files are written, and missing inputs are refused."""
+
 from pathlib import Path
 
 import pandas as pd

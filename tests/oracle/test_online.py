@@ -1,3 +1,7 @@
+"""Tests for the oracle adapters used by the recovery loop: protocol compliance and flags
+raised only where ground truth disagrees with SAM 2.
+"""
+
 from pathlib import Path
 from typing import Any
 

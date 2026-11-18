@@ -1,3 +1,7 @@
+"""Tests for the aligned CSRT tracker: not initialised before init, following a square,
+re-initialising from a mask and keeping state on empty masks.
+"""
+
 import numpy as np
 import numpy.typing as npt
 import pytest

@@ -1,3 +1,7 @@
+"""Tests for the completeness check script: complete runs pass, and unfinished videos,
+deleted PNGs and missing timing fail with the video named.
+"""
+
 from pathlib import Path
 
 import pytest

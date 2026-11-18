@@ -1,3 +1,7 @@
+"""Tests for the E10 failure-type breakdown using a fake ground-truth reader and written
+SAM 2 alone masks.
+"""
+
 from dataclasses import replace
 from pathlib import Path
 

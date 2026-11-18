@@ -54,12 +54,31 @@ class E3Error(ValueError):
 
 
 def method_for(removed: str) -> str:
+    """Name of the E2 recovery run that has one rule removed.
+
+    Args:
+        removed: Rule name, or "none" for the full system.
+
+    Returns:
+        Method name such as "fix_rules_csrt_tiny" or "fix_rules_no_<rule>_csrt_tiny".
+    """
     if removed == NONE:
         return f"fix_rules_csrt_{MODEL}"
     return f"fix_rules_no_{removed}_csrt_{MODEL}"
 
 
 def load_detector(path: Path) -> pd.DataFrame:
+    """Load and validate the E3 detector result CSV of one split.
+
+    Args:
+        path: Path of results/e3_detector_<split>.csv.
+
+    Returns:
+        The table, with one row per removed rule in the order of REMOVED.
+
+    Raises:
+        E3Error: If the file is missing, or its columns or rows are not the expected ones.
+    """
     if not path.is_file():
         raise E3Error(f"missing input file: {path}")
     table = pd.read_csv(path)
@@ -71,15 +90,32 @@ def load_detector(path: Path) -> pd.DataFrame:
 
 
 def _keys(rows: Sequence[ScoreRow]) -> set[tuple[str, int]]:
+    """Set of (video, object) pairs covered by a list of score rows."""
     return {(r.video, r.object) for r in rows}
 
 
 def build_table(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dict[str, object]]:
+    """Combine the scores of every ablation run with the detector counts, per test set.
+
+    Args:
+        results_dir: Folder with the scored runs, their event files and the detector CSVs.
+        splits: Test sets to include.
+
+    Returns:
+        One row per (test set, removed rule) with J, F, J&F, the J&F deltas versus the full
+        system and versus SAM 2 alone, the number of re-prompts, and the detector counts.
+
+    Raises:
+        E3Error: If an input is missing, or a run scores other videos or objects than
+        SAM 2 alone.
+    """
     out: list[dict[str, object]] = []
     for split in splits:
+        # SAM 2 alone is the reference for the deltas and for the object set.
         alone = load_scores(results_dir / f"{ALONE}_{split}.csv")
         detector = load_detector(detector_path(results_dir, split))
         alone_jf = means(alone)["J&F"]
+        # Score every ablation run and count its re-prompts from the events file.
         runs = {}
         for removed in REMOVED:
             name = f"{method_for(removed)}_{split}"
@@ -88,9 +124,11 @@ def build_table(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[di
                 raise E3Error(f"{name}: scores different videos or objects than SAM 2 alone")
             events = load_events(results_dir / f"events_{name}.csv")
             runs[removed] = (means(scores), int((events["action"] == "reprompted").sum()))
+        # The full system (nothing removed) is the reference for delta_vs_full.
         full_jf = runs[NONE][0]["J&F"]
         for removed in REMOVED:
             score, reprompts = runs[removed]
+            # Attach the detector counts of this removed rule.
             det = detector[detector["removed_rule"] == removed].iloc[0]
             out.append(
                 {
@@ -109,6 +147,12 @@ def build_table(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[di
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the E3 table as a CSV in the column order TABLE_COLUMNS, atomically.
+
+    Args:
+        path: Output CSV path; its folder is created if needed.
+        table: Rows from build_table. Floats are written with repr so no precision is lost.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -122,6 +166,15 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point that builds results/e3.csv.
+
+    Reads the scored runs, their event files and the detector CSVs under --results-dir and
+    writes the table to --out. Exits with code 0 on success; an inconsistent or missing input
+    raises E3Error.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--out", default=DEFAULT_OUT)

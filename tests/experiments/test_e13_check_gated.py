@@ -1,3 +1,7 @@
+"""Tests for the gated-run check: untouched videos must be identical, and after a re-prompt
+only earlier frames are compared.
+"""
+
 from pathlib import Path
 
 import pandas as pd

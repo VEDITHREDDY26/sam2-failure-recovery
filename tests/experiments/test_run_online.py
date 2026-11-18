@@ -1,3 +1,7 @@
+"""Tests for the online run script: help without data, oracle configs refused, missing rules
+stop early, and real-system runs end to end with a fake predictor.
+"""
+
 import json
 from pathlib import Path
 

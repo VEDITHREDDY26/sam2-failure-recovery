@@ -1,3 +1,7 @@
+"""Tests for the DAVIS scorer wrapper: perfect score on ground truth, empty objects score
+zero, missing frames and other resolutions are errors.
+"""
+
 from pathlib import Path
 
 import numpy as np

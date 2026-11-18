@@ -41,6 +41,11 @@ Image = npt.NDArray[np.uint8]
 
 
 def check_output_path(out: Path) -> Path:
+    """Validate the demo video path and return it resolved.
+
+    Raises:
+        SystemExit: If the path is inside the repository or does not end in .mp4.
+    """
     resolved = out.expanduser().resolve()
     if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
         raise SystemExit(f"{out} is inside the repository; write the demo video to Drive instead")
@@ -50,6 +55,11 @@ def check_output_path(out: Path) -> Path:
 
 
 def _text(image: Image, lines: Sequence[str], top: int = 18, scale: float = 0.5) -> None:
+    """Write white text lines onto the BGR image in place.
+
+    Lines are 18 pixels apart vertically, the first one `top` pixels from the top edge, all 6
+    pixels from the left edge.
+    """
     for i, line in enumerate(lines):
         cv2.putText(
             image, line, (6, top + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1
@@ -57,11 +67,13 @@ def _text(image: Image, lines: Sequence[str], top: int = 18, scale: float = 0.5)
 
 
 def _fit(image: Image, height: int) -> Image:
+    """Resize an image to the given height, keeping its aspect ratio."""
     width = max(1, round(image.shape[1] * height / image.shape[0]))
     return np.asarray(cv2.resize(image, (width, height)), dtype=np.uint8)
 
 
 def clip_label(row: pd.Series) -> list[str]:
+    """Return the three caption lines of a clip: video and role, methods with J&F, results files."""
     fix = f"ORACLE {row['fix_method']}" if is_oracle_row(row) else str(row["fix_method"])
     return [
         f"{row['split']} / {row['video']}  ({row['role']})",
@@ -72,7 +84,19 @@ def clip_label(row: pd.Series) -> list[str]:
 
 
 def compose_frame(row: pd.Series, video: VideoSample, index: int, output_root: Path) -> Image:
+    """Build one video frame: caption bar above three panels (alone, fix, ground truth).
+
+    Args:
+        row: Selection row of the clip.
+        video: The loaded video.
+        index: Zero-based frame index to draw.
+        output_root: Folder holding the saved SAM 2 masks.
+
+    Returns:
+        BGR image.
+    """
     clip = load_clip_frame(output_root, row, video, index)
+    # Missing ground truth is shown as a black panel with a note.
     gt = overlay_mask(clip.frame, clip.gt) if clip.gt is not None else np.zeros_like(clip.frame)
     if clip.gt is None:
         _text(gt, ["no annotation"])
@@ -80,6 +104,7 @@ def compose_frame(row: pd.Series, video: VideoSample, index: int, output_root: P
     fix = f"ORACLE {row['fix_method']}" if is_oracle_row(row) else str(row["fix_method"])
     for panel, name in zip(panels, (str(row["alone_method"]), fix, "ground truth"), strict=True):
         _text(panel, [name])
+    # Join the panels side by side and put the caption bar on top.
     strip = np.hstack([_fit(p, PANEL_HEIGHT) for p in panels])
     bar = np.zeros((CAPTION_HEIGHT, strip.shape[1], 3), dtype=np.uint8)
     _text(
@@ -93,6 +118,7 @@ def compose_frame(row: pd.Series, video: VideoSample, index: int, output_root: P
 
 
 def title_card(row: pd.Series, size: tuple[int, int]) -> Image:
+    """Make the black title card of a clip; size is (width, height) in pixels."""
     card = np.zeros((size[1], size[0], 3), dtype=np.uint8)
     _text(
         card,
@@ -104,6 +130,10 @@ def title_card(row: pd.Series, size: tuple[int, int]) -> Image:
 
 
 def clip_indices(frame_index: int, num_frames: int, before: int, after: int) -> range:
+    """Return the frame indices from `before` frames before frame_index to `after` frames after it.
+
+    The range is clipped to the video (0 to num_frames - 1).
+    """
     return range(max(0, frame_index - before), min(num_frames, frame_index + after + 1))
 
 
@@ -117,6 +147,7 @@ def make_demo(
     fps: int = 10,
 ) -> int:
     """Write the clips one after another; returns the number of video frames written."""
+    # The writer is created lazily from the first composed frame so its size is known.
     out = check_output_path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     writer: cv2.VideoWriter | None = None
@@ -131,6 +162,8 @@ def make_demo(
             writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
             if not writer.isOpened():
                 raise OSError(f"cannot open {out} for writing")
+        # Each clip starts with a title card held for CARD_SECONDS; all images are resized to one
+        # size.
         card = title_card(row, size)
         for image in [card] * (CARD_SECONDS * fps) + frames:
             writer.write(np.asarray(cv2.resize(image, size), dtype=np.uint8))
@@ -142,6 +175,17 @@ def make_demo(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: write the demo video.
+
+    Reads --selection (default results/e10_selection.csv) and the dataset frames, ground truth
+    and saved masks found through the data configuration. Writes the .mp4 at --out (required,
+    outside the repo) with --before and --after frames around each selected frame at --fps, and
+    prints the frame count. Exits through the argument parser with an error if the data-root
+    environment variable is not set, and with a message if --out is invalid; otherwise 0.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--selection", type=Path, default=Path("results/e10_selection.csv"))
     parser.add_argument("--out", type=Path, required=True)
@@ -149,6 +193,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--after", type=int, default=30)
     parser.add_argument("--fps", type=int, default=10)
     args = parser.parse_args(argv)
+    # Validate the output path and data root first, then build the demo from the selection.
     check_output_path(args.out)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
@@ -164,6 +209,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.after,
         args.fps,
     )
+    # Report how many frames were written.
     print(f"{count} frames -> {args.out}")
 
 

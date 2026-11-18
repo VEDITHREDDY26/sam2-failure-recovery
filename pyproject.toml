@@ -14,7 +14,13 @@ target-version = "py311"
 extend-exclude = [".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+# D1: every module, class, function and method needs a docstring (empty package files excepted).
+select = ["E", "F", "I", "B", "UP", "SIM", "D1"]
+ignore = ["D104"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test functions are named after what they check; each test file still needs a module docstring.
+"tests/**" = ["D101", "D102", "D103", "D105", "D106", "D107"]
 
 [tool.black]
 line-length = 100

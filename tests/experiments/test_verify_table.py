@@ -1,3 +1,7 @@
+"""Tests for the verification results table: three rows with counts and deltas, documented
+columns, and refusal of missing or mismatched inputs.
+"""
+
 from pathlib import Path
 
 import pandas as pd

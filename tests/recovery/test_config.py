@@ -1,3 +1,7 @@
+"""Tests for the recovery config: shipped configs and gates load, and real-system configs
+with oracle flags or oracle boxes are rejected.
+"""
+
 from pathlib import Path
 
 import pytest

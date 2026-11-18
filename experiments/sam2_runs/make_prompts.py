@@ -25,8 +25,21 @@ from src.sam2_runner.smoke import load_data_config
 
 
 def video_prompts(video: VideoSample) -> tuple[dict[str, Any], list[int]]:
+    """Build the prompt entry of one video.
+
+    Args:
+        video: Video with ground truth.
+
+    Returns:
+        ({"boxes": {object id: {"frame_index": first visible frame (0-based), "box": [x0, y0, x1,
+        y1] with right and bottom exclusive}}}, ids of objects that are never visible).
+
+    Raises:
+        ValueError: If no object of the video is ever visible.
+    """
     boxes: dict[str, Any] = {}
     never: list[int] = []
+    # Prompt each object at the first annotated frame where it is visible.
     for obj_id in video.object_ids:
         try:
             first = video.first_box(obj_id)
@@ -38,6 +51,7 @@ def video_prompts(video: VideoSample) -> tuple[dict[str, Any], list[int]]:
             "frame_index": first.frame_index,
             "box": [box.x0, box.y0, box.x1, box.y1],
         }
+    # A video where nothing is ever visible cannot be run at all.
     if not boxes:
         raise ValueError(
             f"video '{video.name}' has no object that is ever visible: nothing to prompt"
@@ -46,8 +60,19 @@ def video_prompts(video: VideoSample) -> tuple[dict[str, Any], list[int]]:
 
 
 def build_prompts(cfg: DataConfig, split: str, subset_file: Path = SUBSET_FILE) -> dict[str, Any]:
+    """Build the prompts of every video of a split.
+
+    Args:
+        cfg: Data config.
+        split: "davis_val", "sav_val" or "sav_test".
+        subset_file: List of the seeded SA-V test subset (used only for "sav_test").
+
+    Returns:
+        Dict with "split", "videos" (name -> entry) and "never_visible" (name -> object ids).
+    """
     videos: dict[str, Any] = {}
     never_visible: dict[str, list[int]] = {}
+    # Loop over the split's video list in its order.
     for name in split_videos(cfg, split, subset_file):
         entry, never = video_prompts(load_video(cfg, split, name))
         videos[name] = entry
@@ -57,10 +82,28 @@ def build_prompts(cfg: DataConfig, split: str, subset_file: Path = SUBSET_FILE) 
 
 
 def default_output(cfg: DataConfig, split: str) -> Path:
+    """Default path of a split's prompts file: <data_root>/<output_root>/prompts/<split>.json.
+
+    Args:
+        cfg: Data config.
+        split: Split name.
+    """
     return cfg.data_root / cfg.output_root / "prompts" / f"{split}.json"
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: write the prompts JSON for one split.
+
+    Writes the file to --out (default: the path from default_output) and prints the number of
+    videos, objects and objects that start after frame 0, then the objects left out.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments or when the data-root environment
+            variable is not set.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--split", choices=["davis_val", "sav_val", "sav_test"], required=True)
     parser.add_argument("--out", type=Path, default=None)
@@ -74,6 +117,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, indent=1) + "\n")
     objects = sum(len(v["boxes"]) for v in data["videos"].values())
+    # Objects whose first visible frame is after frame 0 start later in the video.
     later = sum(
         1 for v in data["videos"].values() for b in v["boxes"].values() if b["frame_index"] > 0
     )

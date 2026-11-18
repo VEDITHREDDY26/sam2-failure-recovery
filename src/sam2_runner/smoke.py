@@ -38,6 +38,14 @@ def run_smoke(
 
 
 def load_data_config() -> DataConfig:
+    """Load the data settings (data root, dataset folders, output root) from configs/data.yaml.
+
+    Returns:
+        The parsed data config.
+
+    Raises:
+        ConfigError: If the file is not a data config.
+    """
     cfg = load_config(DATA_CONFIG)
     if not isinstance(cfg, DataConfig):
         raise ConfigError(f"{DATA_CONFIG}: not a data config")
@@ -45,6 +53,19 @@ def load_data_config() -> DataConfig:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: run SAM 2 on one DAVIS val video from a prompts file.
+
+    Reads the single-video prompts JSON and the video's frames from the DAVIS folder under the
+    data root; writes masks, signals and timing under <output_root>/<method>/davis_val/ (default
+    method sam2_<model>_smoke) and prints a frame count, the object ids and the score source.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments, when the data-root environment
+            variable is not set, or when the prompts file is for a different video.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--model", choices=["tiny", "large"], required=True)
     parser.add_argument("--video", required=True)
@@ -52,12 +73,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--method", default=None)
     args = parser.parse_args(argv)
+    # Fail early with a clear message when the data folder is not configured.
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     cfg = load_data_config()
     prompts = load_prompts(args.prompts)
     if prompts.video != args.video:
         parser.error(f"prompts are for video '{prompts.video}', not '{args.video}'")
+    # Frames come from the DAVIS folder; the model is built last because it needs a GPU.
     frames_dir = cfg.data_root / cfg.davis.root / "JPEGImages" / cfg.davis.resolution / args.video
     method = args.method or f"sam2_{args.model}_smoke"
     predictor = build_predictor(args.model, cfg.data_root, device=args.device)

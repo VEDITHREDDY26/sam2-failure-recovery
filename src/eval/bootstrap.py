@@ -20,6 +20,14 @@ DEFAULT_LEVEL = 0.95
 
 @dataclass(frozen=True)
 class Interval:
+    """A point estimate with its percentile confidence interval.
+
+    Attributes:
+        estimate: Statistic computed on the original data (not the resample average).
+        low: Lower percentile bound of the resampled statistic.
+        high: Upper percentile bound of the resampled statistic.
+    """
+
     estimate: float
     low: float
     high: float
@@ -28,6 +36,13 @@ class Interval:
 def _percentile_interval(
     samples: npt.NDArray[np.float64], estimate: float, level: float
 ) -> Interval:
+    """Take the central `level` percentile range of the resampled statistics.
+
+    Args:
+        samples: Statistic from each resample.
+        estimate: Point estimate on the original data.
+        level: Confidence level, e.g. 0.95 uses the 2.5th and 97.5th percentiles.
+    """
     tail = (1.0 - level) / 2.0 * 100.0
     low, high = np.percentile(samples, [tail, 100.0 - tail])
     return Interval(estimate, float(low), float(high))
@@ -40,8 +55,22 @@ def _ratio_bootstrap(
     resamples: int,
     level: float,
 ) -> Interval:
+    """Bootstrap a ratio of sums over videos (a mean over objects, or a mean difference).
+
+    Args:
+        sums: Per-video sum of the score (or of the paired difference).
+        counts: Per-video number of objects.
+        seed: Seed of the random generator, so intervals are reproducible.
+        resamples: Number of bootstrap resamples.
+        level: Confidence level.
+
+    Raises:
+        ValueError: If there are no videos or no objects.
+    """
     if len(sums) == 0 or counts.sum() <= 0:
         raise ValueError("bootstrap needs at least one video with objects")
+    # Resample whole videos with replacement: objects of one video are not independent.
+    # Each resample's mean is total score / total objects of the drawn videos.
     rng = np.random.default_rng(seed)
     drawn = rng.integers(0, len(sums), size=(resamples, len(sums)))
     stats = sums[drawn].sum(axis=1) / counts[drawn].sum(axis=1)
@@ -51,6 +80,15 @@ def _ratio_bootstrap(
 def _per_video(
     scores: Mapping[str, Sequence[float]],
 ) -> tuple[list[str], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Summarise scores per video.
+
+    Args:
+        scores: For each video, the scores of its objects.
+
+    Returns:
+        Sorted video names, the sum of scores per video and the object count per video, in the
+        same order.
+    """
     videos = sorted(scores)
     sums = np.array([float(np.sum(scores[v])) for v in videos])
     counts = np.array([float(len(scores[v])) for v in videos])

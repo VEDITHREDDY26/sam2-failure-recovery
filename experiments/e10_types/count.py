@@ -26,8 +26,22 @@ class LabelError(ValueError):
 
 
 def validate(labels: pd.DataFrame, sample: pd.DataFrame) -> pd.DataFrame:
+    """Check the filled labels against the sample and return clean (sample_id, type) rows.
+
+    Args:
+        labels: Filled labelling table with sample_id and type columns.
+        sample: The sample table the labels were made for.
+
+    Returns:
+        Table with stripped sample_id and type columns.
+
+    Raises:
+        LabelError: If a column is missing, a type is blank or not allowed, or a sample_id is
+            duplicated, unknown or missing.
+    """
     if not {"sample_id", "type"} <= set(labels.columns):
         raise LabelError(f"labels need columns sample_id and type, got {list(labels.columns)}")
+    # Strip whitespace, then refuse blanks, duplicates, unknown or missing ids, and unknown types.
     ids = labels["sample_id"].astype(str).str.strip()
     types = labels["type"].fillna("").astype(str).str.strip()
     if (types == "").any():
@@ -46,6 +60,15 @@ def validate(labels: pd.DataFrame, sample: pd.DataFrame) -> pd.DataFrame:
 
 
 def count_types(labels: pd.DataFrame, sample: pd.DataFrame) -> list[list[object]]:
+    """Count labelled failures per type, in total and per test set.
+
+    Args:
+        labels: Validated labels from validate.
+        sample: Sample table that supplies each sample's split.
+
+    Returns:
+        One row per allowed type: [type, count, share of all labels, one count per split].
+    """
     joined = labels.merge(sample[["sample_id", "split"]], on="sample_id")
     total = len(joined)
     rows: list[list[object]] = []
@@ -57,6 +80,15 @@ def count_types(labels: pd.DataFrame, sample: pd.DataFrame) -> list[list[object]
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: validate the labels and write the type counts.
+
+    Reads --labels (required), --sample (default results/e10_types_sample.csv) and writes
+    --out (default results/e10_types.csv). Invalid labels raise LabelError and exit non-zero;
+    otherwise exit status 0.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--sample", type=Path, default=Path("results/e10_types_sample.csv"))

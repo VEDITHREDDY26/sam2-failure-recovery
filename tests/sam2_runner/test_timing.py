@@ -1,3 +1,7 @@
+"""Tests for the timing file: agreed columns, written before the signal CSV, missing timing
+makes a video incomplete, and empty device fields without torch.
+"""
+
 import sys
 from pathlib import Path
 

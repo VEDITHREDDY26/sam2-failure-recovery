@@ -1,3 +1,7 @@
+"""Tests for the oracle-box experiment script: real-system and SA-V val configs refused,
+rules needed only by the arm that uses them, and shipped oracle configs match the arms.
+"""
+
 import json
 from pathlib import Path
 

@@ -71,6 +71,15 @@ class Recording:
 
 @dataclasses.dataclass(frozen=True)
 class Reprompt:
+    """Where and how to re-prompt a video in the spike.
+
+    Attributes:
+        frame: Zero-based frame index t that receives the box.
+        obj_id: Object id the box belongs to.
+        box: Box in xyxy pixel coordinates.
+        note: Remark when the preferred frame had to be moved, else an empty string.
+    """
+
     frame: int
     obj_id: int
     box: Box
@@ -79,6 +88,7 @@ class Reprompt:
 
 def choose_reprompt(video: VideoSample) -> Reprompt:
     """Frame num_frames // 2 (or the next frame where the smallest object is visible)."""
+    # Start at the middle frame and move on until the object has a non-empty ground-truth mask.
     obj_id = video.object_ids[0]
     start = video.num_frames // 2
     for frame in range(start, video.num_frames):
@@ -91,6 +101,19 @@ def choose_reprompt(video: VideoSample) -> Reprompt:
 
 
 def record(results: Any, recording: Recording, frames: Sequence[int] | None = None) -> Recording:
+    """Collect the frames yielded by a propagation into a recording.
+
+    Args:
+        results: Iterable of (frame index, object ids, mask logits) from propagate_in_video.
+        recording: Recording to extend.
+        frames: If given, the only frame indices allowed to appear.
+
+    Returns:
+        The same recording.
+
+    Raises:
+        RuntimeError: If a frame outside frames is yielded.
+    """
     for frame_idx, obj_ids, logits in results:
         if frames is not None and frame_idx not in frames:
             raise RuntimeError(f"unexpected frame {frame_idx}")
@@ -101,10 +124,12 @@ def record(results: Any, recording: Recording, frames: Sequence[int] | None = No
 
 
 def _logits(value: Any) -> Array:
+    """Convert a mask-logit tensor to a float32 NumPy array."""
     return np.asarray(to_numpy(value), dtype=np.float32)
 
 
 def prompt_first_frame(predictor: VideoPredictor, state: Any, video: VideoSample) -> None:
+    """Give every object its first-frame ground-truth box, as the normal runs do."""
     for obj_id in video.object_ids:
         prompt = video.first_box(obj_id)
         predictor.add_new_points_or_box(state, prompt.frame_index, obj_id, box=sam2_box(prompt.box))
@@ -113,6 +138,14 @@ def prompt_first_frame(predictor: VideoPredictor, state: Any, video: VideoSample
 def add_reprompt(
     predictor: VideoPredictor, state: Any, reprompt: Reprompt, recording: Recording
 ) -> None:
+    """Add the re-prompt box to the predictor state and store the mask it returns.
+
+    Args:
+        predictor: SAM 2 video predictor.
+        state: Inference state of the video.
+        reprompt: Frame, object and box to add.
+        recording: Receives the logits returned by the add call, by object id.
+    """
     box = sam2_box(reprompt.box)
     _, obj_ids, logits = predictor.add_new_points_or_box(
         state, reprompt.frame, reprompt.obj_id, box=box
@@ -122,6 +155,11 @@ def add_reprompt(
 
 
 def run_baseline(predictor: VideoPredictor, video: VideoSample) -> tuple[Any, Recording]:
+    """Track the whole video from the first-frame boxes without any re-prompt.
+
+    Returns:
+        The inference state (kept so a re-prompt can be added later) and the recorded logits.
+    """
     state = predictor.init_state(str(video.frames_dir))
     prompt_first_frame(predictor, state, video)
     return state, record(predictor.propagate_in_video(state), Recording())
@@ -150,10 +188,12 @@ def run_fresh_cond(predictor: VideoPredictor, video: VideoSample, reprompt: Repr
 
 
 def _binary(logits: Array) -> Array:
+    """Threshold mask logits at 0 to get the predicted mask."""
     return logits > 0
 
 
 def _frames_text(frames: Sequence[int]) -> str:
+    """Format a frame list as "first..last", or "none" if empty."""
     return f"{min(frames)}..{max(frames)}" if frames else "none"
 
 
@@ -170,6 +210,7 @@ def summarize(
     t = reprompt.frame
     rows = []
     for obj_id in object_ids:
+        # Split the yielded frames into before and after the re-prompt frame.
         before = [f for f in sorted(set(run.yielded)) if f < t and (f, obj_id) in run.logits]
         after = [f for f in sorted(set(run.yielded)) if f >= t and (f, obj_id) in run.logits]
         diffs = [
@@ -186,6 +227,7 @@ def summarize(
             )
             for f in after
         )
+        # Pixel change at t, and whether the mask returned by the add call already differs.
         base_t = _binary(baseline.logits[(t, obj_id)])
         changed = int((_binary(run.logits[(t, obj_id)]) != base_t).sum()) if t in after else 0
         added = run.added.get(obj_id)
@@ -226,6 +268,7 @@ def run_video(
     build: Callable[[bool], VideoPredictor], video: VideoSample, model: str
 ) -> list[dict[str, Any]]:
     """All three sequences on one video. `build(add_all)` makes a fresh predictor."""
+    # The baseline state is reused by correct_tracked; fresh_cond builds its own state.
     reprompt = choose_reprompt(video)
     ids = video.object_ids
     default = build(False)
@@ -235,6 +278,7 @@ def run_video(
     sequences["correct_tracked"] = run_correct_tracked(default, state, reprompt)
     for name in ("correct_tracked", "fresh_cond"):
         rows += summarize(video.name, model, name, reprompt, base, sequences[name], ids)
+    # Third sequence uses a predictor with the override, with its own baseline for comparison.
     cond = build(True)
     cond_state, cond_base = run_baseline(cond, video)
     cond_run = run_correct_tracked(cond, cond_state, reprompt)
@@ -248,10 +292,12 @@ def build_spike_predictor(
     """Official builder; the flag is a Hydra override, SAM 2 code is unchanged (Colab only)."""
     cfg = load_models_config()
     spec = cfg.tiny if model == "tiny" else cfg.large
+    # Checkpoint paths come from the config and data root, never hard-coded.
     ckpt = cfg.checkpoint_path(data_root, spec)
     if not ckpt.is_file():
         raise FileNotFoundError(f"{ckpt} not found; run scripts/get_checkpoints.sh")
     build = importlib.import_module("sam2.build_sam").build_sam2_video_predictor
+    # Optionally let SAM 2 add all frames to its memory (override applied at build time).
     extra = [ADD_ALL_OVERRIDE] if add_all_frames else []
     predictor: VideoPredictor = build(
         spec.model_cfg, str(ckpt), device=device, hydra_overrides_extra=extra
@@ -260,10 +306,12 @@ def build_spike_predictor(
 
 
 def output_path(cfg: DataConfig, model: str) -> Path:
+    """Return the CSV path <data_root>/<output_root>/spikes/reprompt_<model>.csv."""
     return cfg.data_root / cfg.output_root / "spikes" / f"reprompt_{model}.csv"
 
 
 def write_table(rows: Sequence[Mapping[str, Any]], path: Path) -> pd.DataFrame:
+    """Write the summary rows to a CSV with the fixed columns and return them as a table."""
     table = pd.DataFrame(list(rows), columns=list(COLUMNS))
     path.parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(path, index=False)
@@ -271,6 +319,7 @@ def write_table(rows: Sequence[Mapping[str, Any]], path: Path) -> pd.DataFrame:
 
 
 def verdict_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Format, per sequence, how many videos pass the acceptance check."""
     verdict = acceptance(rows)
     lines = []
     for sequence in SEQUENCES:
@@ -283,6 +332,16 @@ def verdict_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: run the re-prompt API spike.
+
+    Reads DAVIS videos (--videos, default the first three) and the SAM 2 checkpoint for --model
+    (required) on --device (default cuda). Writes the comparison CSV under the data root's
+    output folder and prints the table and a pass count per sequence. Exits through the argument
+    parser with an error if the data-root environment variable is not set; otherwise 0.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description="Re-prompt API spike")
     parser.add_argument("--model", choices=list(MODELS), required=True)
     parser.add_argument("--videos", nargs="+", default=None)
@@ -291,9 +350,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     cfg = load_data_config()
+    # Use the given videos, else the first few DAVIS videos.
     names = args.videos or list(list_davis_videos(cfg)[:DEFAULT_VIDEO_COUNT])
 
     def build(add_all: bool) -> VideoPredictor:
+        """Build a predictor for the chosen model and device."""
         return build_spike_predictor(args.model, cfg.data_root, args.device, add_all)
 
     rows: list[dict[str, Any]] = []

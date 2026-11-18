@@ -1,3 +1,7 @@
+"""Tests for the SA-V test subset script: deterministic, order independent, seeded,
+size checks and refusal to overwrite a different subset.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

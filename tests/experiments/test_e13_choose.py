@@ -1,3 +1,7 @@
+"""Tests for choosing the gate setting: outcome classes, gate thresholds, the vectorised gate
+matching the loop version, and the grid shape.
+"""
+
 import math
 from pathlib import Path
 

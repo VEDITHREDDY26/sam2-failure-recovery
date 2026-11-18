@@ -27,6 +27,17 @@ PredictorFactory = Callable[[], VideoPredictor]
 
 
 def frames_dir_for(cfg: DataConfig, split: str, video: str) -> Path:
+    """Return the folder of JPEG frames of one video.
+
+    Args:
+        cfg: Data config with the data root and dataset folders.
+        split: "davis_val", "sav_val" or "sav_test" (any split other than the first two is
+            looked up in the SA-V test folder).
+        video: Video name.
+
+    Returns:
+        DAVIS frames at the configured resolution, or the SA-V 24 fps frames.
+    """
     if split == DAVIS_SPLIT:
         return cfg.data_root / cfg.davis.root / "JPEGImages" / cfg.davis.resolution / video
     folder = cfg.sav.val_split if split == "sav_val" else cfg.sav.test_split
@@ -46,6 +57,7 @@ def run_batch(
     unknown = [v for v in names if v not in prompts.videos]
     if unknown:
         raise ValueError(f"no prompts for videos {unknown}")
+    # Complete videos are skipped, so an interrupted batch can simply be started again.
     output_root = cfg.data_root / cfg.output_root
     predictor: VideoPredictor | None = None
     ran = skipped = 0
@@ -57,6 +69,7 @@ def run_batch(
             print(f"{video}: skipped (complete)")
             skipped += 1
             continue
+        # Build the predictor once, only when the first video that needs running is reached.
         if predictor is None:
             predictor = make_predictor()
         result = run_video(
@@ -74,6 +87,19 @@ def run_batch(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: run SAM 2 over the videos of a prompts file.
+
+    Reads the prompts JSON, builds the predictor lazily (only if some video needs running)
+    and writes masks, signals and timing under <data_root>/<output_root>/<method>/<split>/.
+    Prints one line per video and a final "run, skipped" count.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments or when the data-root environment
+            variable is not set.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--model", choices=["tiny", "large"], required=True)
     parser.add_argument("--prompts", type=Path, required=True)
@@ -86,11 +112,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="keep the decoded video frames on the CPU (long videos on smaller GPUs)",
     )
     args = parser.parse_args(argv)
+    # Fail early with a clear message when the data folder is not configured.
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     method = validate_method(args.method or f"sam2_{args.model}")
     cfg = load_data_config()
     prompts = load_batch_prompts(args.prompts)
+    # Load the model lazily inside run_batch so fully finished runs need no GPU.
     run_batch(
         prompts,
         cfg,

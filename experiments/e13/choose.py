@@ -96,10 +96,27 @@ CHOICE_COLUMNS = (
 
 
 def is_vit(arm: str) -> bool:
+    """Tell whether an arm uses the ViT tracker (and so has a score gate to tune).
+
+    Args:
+        arm: Box-source arm name.
+
+    Returns:
+        True for the arms whose name starts with "vit_".
+    """
     return arm.startswith("vit_")
 
 
 def share(numerator: int, denominator: int) -> float:
+    """Divide two counts, returning NaN when the denominator is zero.
+
+    Args:
+        numerator: Count of cases that meet a condition.
+        denominator: Count of all cases.
+
+    Returns:
+        The fraction, or NaN if there are no cases.
+    """
     return numerator / denominator if denominator else math.nan
 
 
@@ -111,6 +128,15 @@ def exact_rows(candidates: pd.DataFrame) -> pd.DataFrame:
 
 
 def view_rows(candidates: pd.DataFrame, view: str) -> pd.DataFrame:
+    """Select the candidates that belong to one view of the pilot table.
+
+    Args:
+        candidates: Candidate rows of one arm.
+        view: One of VIEWS: "exact", "first_of_object" or "all".
+
+    Returns:
+        The rows of that view ("all" returns every row).
+    """
     if view == "exact":
         return exact_rows(candidates)
     if view == "first_of_object":
@@ -131,7 +157,9 @@ def reprompt_mask(table: pd.DataFrame, s_min: float | None, a_max: float | None)
 
 def outcomes(table: pd.DataFrame, s_min: float | None, a_max: float | None) -> tuple[int, int, int]:
     """(useful, harmful, neutral) over the scored candidates of one arm."""
+    # Candidates without ground truth cannot be judged, so they are left out.
     scored = table[table["cls"] != "unscored"]
+    # Re-prompts are the candidates the gate and box check let through.
     sent = scored[reprompt_mask(scored, s_min, a_max)]
     good = sent["iou_gt"].fillna(0.0) >= GOOD_IOU
     useful = int(((sent["cls"] == "real_failure") & good).sum())
@@ -142,12 +170,27 @@ def outcomes(table: pd.DataFrame, s_min: float | None, a_max: float | None) -> t
 def pilot_rows(
     model: str, candidates: pd.DataFrame, timing: pd.DataFrame
 ) -> list[dict[str, object]]:
+    """Build the stage 1 table rows (one per arm and view) for one model.
+
+    Args:
+        model: "tiny" or "large".
+        candidates: Candidate rows of all arms from the pilot.
+        timing: Per-video tracker call counts and seconds from the pilot.
+
+    Returns:
+        One dictionary per (arm, view) with the PILOT_COLUMNS: counts by class, box status counts,
+        box-check passes, shares of good boxes and of boxes that copy SAM 2, and milliseconds per
+        tracker call.
+    """
     rows: list[dict[str, object]] = []
     for arm in ARM_ORDER:
+        # Tracker time per arm comes from the timing table, summed over videos.
         seconds = float(timing.loc[timing["arm"] == arm, "seconds"].sum())
         calls = int(timing.loc[timing["arm"] == arm, "calls"].sum())
+        # Each arm is summarised once per view of the candidates.
         for view in VIEWS:
             part = view_rows(candidates[candidates["arm"] == arm], view)
+            # Split the candidates by ground-truth class to measure how good the boxes are.
             real = part[part["cls"] == "real_failure"]
             alarms = part[part["cls"] == "false_alarm"]
             check = part["box_check_ok"].astype(str) == "True"
@@ -180,9 +223,21 @@ _STATUSES = ("ok", "lost", "not_initialised")
 
 
 def grid_rows(model: str, candidates: pd.DataFrame) -> list[dict[str, object]]:
+    """Build the stage 2 gate grid (net re-prompt outcomes per gate setting) for one model.
+
+    Args:
+        model: "tiny" or "large".
+        candidates: Candidate rows of all arms from the pilot.
+
+    Returns:
+        One dictionary per arm, grid view and gate setting with the GRID_COLUMNS. The score gate
+        (s_min) is only varied for ViT arms; "off" marks a disabled gate.
+    """
     rows: list[dict[str, object]] = []
+    # Every arm and view is scored over the whole gate grid.
     for arm, view in itertools.product(ARM_ORDER, GRID_VIEWS):
         table = view_rows(candidates[candidates["arm"] == arm], view)
+        # Only ViT arms have a confidence score to gate on; other arms use no score gate.
         for s_min in S_MIN_GRID if is_vit(arm) else (None,):
             for a_max in A_MAX_GRID:
                 useful, harmful, neutral = outcomes(table, s_min, a_max)
@@ -204,17 +259,29 @@ def grid_rows(model: str, candidates: pd.DataFrame) -> list[dict[str, object]]:
 
 
 def _restriction(row: pd.Series[Any]) -> int:
+    """Count how many gates a grid row switches on (0, 1 or 2).
+
+    Args:
+        row: A grid row with "s_min" and "a_max" fields, "off" meaning disabled.
+
+    Returns:
+        The number of gates that are not "off".
+    """
     return int(row["s_min"] != "off") + int(row["a_max"] != "off")
 
 
 def choose(model: str, grid: pd.DataFrame, view: str = CHOICE_VIEW) -> dict[str, object]:
     """The grid row with the highest net; ties by re-prompts, arm order, then fewer gates."""
+    # Keep the grid rows of this model and view; the choice uses one view only.
     table = grid[(grid["model"] == model) & (grid["view"] == view)].copy()
+    # Rank arms by simplicity (ARM_ORDER) and count gates, for tie-breaking.
     table["arm_rank"] = table["arm"].map({a: i for i, a in enumerate(ARM_ORDER)})
     table["restriction"] = table.apply(_restriction, axis=1)
+    # Highest net first, then fewer re-prompts, simpler arm, fewer gates.
     best = table.sort_values(
         ["net", "reprompts", "arm_rank", "restriction"], ascending=[False, True, True, True]
     ).iloc[0]
+    # Reference: the CSRT reinit arm with no gate, which a new box source must beat.
     base = table[
         (table["arm"] == BASELINE_ARM) & (table["s_min"] == "off") & (table["a_max"] == "off")
     ]["net"].iloc[0]
@@ -233,34 +300,87 @@ def choose(model: str, grid: pd.DataFrame, view: str = CHOICE_VIEW) -> dict[str,
 
 
 def scored_candidates(candidates: pd.DataFrame, arm: object) -> int:
+    """Count the exact-view candidates of an arm that have a ground-truth class.
+
+    Args:
+        candidates: Candidate rows of all arms.
+        arm: Arm name to count for.
+
+    Returns:
+        Number of candidates whose own frame is annotated and that are not "unscored".
+    """
     part = exact_rows(candidates[candidates["arm"] == arm])
     return int((part["cls"] != "unscored").sum())
 
 
 def gate_yaml(choice: dict[str, object]) -> str:
+    """Render the gate config text for a choice.
+
+    Args:
+        choice: A choice row with the "s_min" and "a_max" settings ("off" means disabled).
+
+    Returns:
+        YAML text of kind box_gate where a disabled gate is written as .inf.
+    """
+
     def value(v: object) -> str:
+        """Format one gate setting: ".inf" when off, otherwise the number."""
         return ".inf" if v == "off" else repr(float(v))  # type: ignore[arg-type]
 
     return f"kind: box_gate\ns_min: {value(choice['s_min'])}\na_max: {value(choice['a_max'])}\n"
 
 
 def write_gate_file(config_dir: Path, choice: dict[str, object]) -> Path:
+    """Write the gate config file for one model's choice.
+
+    Args:
+        config_dir: Folder for the recovery configs.
+        choice: The choice row; "model" names the file.
+
+    Returns:
+        The path of the file written.
+    """
     path = config_dir / f"box_gate_{choice['model']}.yaml"
     path.write_text(gate_yaml(choice))
     return path
 
 
 def inputs_for(results_dir: Path, model: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load the merged pilot candidates and timing tables of one model.
+
+    Args:
+        results_dir: Folder that holds the merged pilot CSVs.
+        model: "tiny" or "large".
+
+    Returns:
+        The candidates table and the timing table.
+    """
     cand = results_dir / f"e13_pilot_candidates_{model}_{SPLIT}.csv"
     timing = results_dir / f"e13_pilot_timing_{model}_{SPLIT}.csv"
     return pd.read_csv(cand, dtype={"video": str}), pd.read_csv(timing, dtype={"video": str})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Make the stage 1 table, the gate grid and the choice per model (command line).
+
+    Reads the merged pilot candidate and timing CSVs in --results-dir for each model that has
+    them. Writes e13_pilot.csv, e13_gate_grid.csv and e13_choice.csv there, writes a gate file
+    into --config-dir only for a model whose choice is a go, and prints a verdict line per model.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 on success.
+
+    Raises:
+        SystemExit: If no merged pilot candidates are found.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
     parser.add_argument("--config-dir", type=Path, default=CONFIG_DIR)
     args = parser.parse_args(argv)
+    # Process only the models whose merged pilot files exist.
     models = [
         m for m in MODELS if (args.results_dir / f"e13_pilot_candidates_{m}_{SPLIT}.csv").is_file()
     ]
@@ -274,11 +394,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         pilot_all += pilot_rows(model, candidates, timing)
         grid_all += grid_rows(model, candidates)
         by_model[model] = candidates
+    # Pick one arm and gate per model from the exact view.
     grid = pd.DataFrame(grid_all, columns=list(GRID_COLUMNS))
     choices = [choose(m, grid) for m in models]
     for choice in choices:
         table = by_model[str(choice["model"])]
         choice["scored_candidates"] = scored_candidates(table, choice["arm"])
+    # Write the three result tables.
     pd.DataFrame(pilot_all, columns=list(PILOT_COLUMNS)).to_csv(
         args.results_dir / "e13_pilot.csv", index=False
     )
@@ -287,12 +409,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.results_dir / "e13_choice.csv", index=False
     )
     for choice in choices:
+        # Report each choice; the gate file is written only for a go.
         verdict = "GO" if choice["go"] else "NO-GO"
         sys.stdout.write(
             f"{choice['model']}: {verdict} arm={choice['arm']} s_min={choice['s_min']} "
             f"a_max={choice['a_max']} net={choice['net']} (csrt_reinit ungated "
             f"{choice['baseline_net']}) exact_scored_candidates={choice['scored_candidates']}\n"
         )
+        # For information only: what the all view would have chosen. It does not change the choice.
         info = choose(str(choice["model"]), grid, "all")
         sys.stdout.write(
             f"  info only, view all would choose arm={info['arm']} s_min={info['s_min']} "

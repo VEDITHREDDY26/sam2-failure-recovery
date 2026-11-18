@@ -1,3 +1,7 @@
+"""Tests for the SAM 2 runner with a counting fake predictor: output format, resumption and
+per-video outputs.
+"""
+
 import json
 import re
 import shutil

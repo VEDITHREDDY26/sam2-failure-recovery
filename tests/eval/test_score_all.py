@@ -1,3 +1,7 @@
+"""Tests for scoring every run: complete runs are scored with timing, the SA-V test split
+uses only the subset, and incomplete runs write nothing.
+"""
+
 from pathlib import Path
 
 import pytest

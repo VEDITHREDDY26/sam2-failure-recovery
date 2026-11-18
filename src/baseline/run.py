@@ -30,6 +30,14 @@ SPLITS = ("davis_val", "sav_test")
 
 
 def load_data_config() -> DataConfig:
+    """Load configs/data.yaml and check that it is a data config.
+
+    Returns:
+        The DataConfig (dataset roots, output root).
+
+    Raises:
+        ConfigError: If the file is not a data config.
+    """
     cfg = load_config(DATA_CONFIG)
     if not isinstance(cfg, DataConfig):
         raise ConfigError(f"{DATA_CONFIG}: not a data config")
@@ -37,6 +45,19 @@ def load_data_config() -> DataConfig:
 
 
 def split_videos(cfg: DataConfig, split: str, subset_file: Path = SUBSET_FILE) -> tuple[str, ...]:
+    """List the videos that belong to a split.
+
+    Args:
+        cfg: Data configuration (dataset locations).
+        split: "davis_val" (all DAVIS 2017 val videos) or "sav_test" (the fixed SA-V test subset).
+        subset_file: Text file with the SA-V test subset ids, used for "sav_test".
+
+    Returns:
+        Video names in the split.
+
+    Raises:
+        ValueError: If the split name is unknown.
+    """
     if split == "davis_val":
         return list_davis_videos(cfg)
     if split == "sav_test":
@@ -45,6 +66,12 @@ def split_videos(cfg: DataConfig, split: str, subset_file: Path = SUBSET_FILE) -
 
 
 def loader_for(cfg: DataConfig, split: str) -> Callable[[str], VideoSample]:
+    """Return a function that loads one video of the split into a VideoSample.
+
+    Args:
+        cfg: Data configuration.
+        split: "davis_val" or anything else, which is treated as the SA-V test split.
+    """
     if split == "davis_val":
         return lambda name: load_davis_video(cfg, name)
     return lambda name: load_sav_video(cfg, "test", name)
@@ -60,6 +87,7 @@ def run_batch(
     subset_file: Path = SUBSET_FILE,
 ) -> tuple[int, int]:
     """Run every selected video that is not complete; return (run, skipped)."""
+    # Only videos of the chosen split may be requested.
     allowed = split_videos(cfg, split, subset_file)
     names = list(videos) if videos else list(allowed)
     unknown = [v for v in names if v not in allowed]
@@ -68,6 +96,7 @@ def run_batch(
     output_root = cfg.data_root / cfg.output_root
     load = loader_for(cfg, split)
     ran = skipped = 0
+    # Skip finished videos so an interrupted batch can resume; redo the rest from scratch.
     for name in names:
         video = load(name)
         if is_complete(output_root, method, split, name, video.frame_stems, list(video.object_ids)):
@@ -76,6 +105,7 @@ def run_batch(
             continue
         clear_video(output_root, method, split, name)
         result = run_video(video, base, output_root, method, split, make_tracker)
+        # Count object-frames where the tracker lost the object, for the progress line.
         lost = int((result.status["tracker_ok"] == 0).sum())
         print(
             f"{name}: done, {video.num_frames} frames, {len(video.object_ids)} objects, "
@@ -87,13 +117,25 @@ def run_batch(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: run the baseline on one split.
+
+    Reads the dataset from the data root named by the environment variable and writes masks, a
+    per-frame tracker CSV and a timing CSV per video under the output root. Already complete
+    videos are skipped. Exits with an argparse error (status 2) if the data root variable is not
+    set or an argument is invalid; returns normally (status 0) otherwise.
+
+    Args:
+        argv: Command-line arguments; sys.argv is used when None.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--split", choices=SPLITS, required=True)
     parser.add_argument("--videos", nargs="+", default=None)
     parser.add_argument("--method", default=METHOD)
+    # Fail early, before touching any data, if the data root is not configured.
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Run the batch with the loaded configs; method names are validated against path rules.
     run_batch(
         load_data_config(),
         load_baseline_config(),

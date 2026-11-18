@@ -1,3 +1,7 @@
+"""Tests for the shared config loader: every shipped config loads, data paths resolve under
+the data root, and unknown, missing or wrongly typed keys are rejected.
+"""
+
 from pathlib import Path
 
 import pytest

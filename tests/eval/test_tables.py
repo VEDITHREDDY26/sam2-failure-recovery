@@ -1,3 +1,7 @@
+"""Tests for the results tables: numbers match hand computation, worse videos are counted,
+and missing input is refused without writing.
+"""
+
 import csv
 from pathlib import Path
 

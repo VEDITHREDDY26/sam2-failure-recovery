@@ -1,3 +1,7 @@
+"""Checks that only allowed code imports the failure labels and that the labels never import
+oracle code, using a scan of import statements.
+"""
+
 import ast
 from pathlib import Path
 

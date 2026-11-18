@@ -59,6 +59,15 @@ ACCEPT_NOTHING_NAME = "accept_nothing"
 
 @dataclass(frozen=True)
 class Setting:
+    """One setting of the verification rule.
+
+    Attributes:
+        index: Position in the grid; the order of the grid is the tie-break order.
+        s_min: Minimum candidate score, or None for no check.
+        r_max: Maximum area ratio, or None for no check.
+        b_min: Minimum box IoU, or None for no check.
+    """
+
     index: int
     s_min: float | None
     r_max: float | None
@@ -66,12 +75,14 @@ class Setting:
 
     @property
     def strictness(self) -> int:
+        """Rank of how strict the setting is; larger means stricter (used to break ties)."""
         s = 0 if self.s_min is None else S_GRID.index(self.s_min)
         r = 0 if self.r_max is None else len(R_GRID) - R_GRID.index(self.r_max)
         b = 0 if self.b_min is None else B_GRID.index(self.b_min)
         return s + r + b
 
     def thresholds(self) -> VerifyThresholds:
+        """The setting as thresholds; an unused check becomes an infinite bound."""
         return VerifyThresholds(
             -math.inf if self.s_min is None else self.s_min,
             math.inf if self.r_max is None else self.r_max,
@@ -81,11 +92,21 @@ class Setting:
 
 
 def grid() -> list[Setting]:
+    """All settings of the fixed grid, in the order of s_min, then r_max, then b_min."""
     combos = itertools.product(S_GRID, R_GRID, B_GRID)
     return [Setting(i, s, r, b) for i, (s, r, b) in enumerate(combos)]
 
 
 def accept_mask(table: pd.DataFrame, rule: VerifyThresholds) -> np.ndarray:
+    """Tell which candidates a rule accepts.
+
+    Args:
+        table: Candidates with cand_score, area_ratio and box_iou columns.
+        rule: Thresholds; a non-finite threshold skips its check.
+
+    Returns:
+        Boolean array, True where the candidate passes every active check.
+    """
     ok = np.ones(len(table), dtype=bool)
     if math.isfinite(rule.s_min):
         ok &= (table["cand_score"].to_numpy(float) >= rule.s_min).astype(bool)
@@ -97,10 +118,23 @@ def accept_mask(table: pd.DataFrame, rule: VerifyThresholds) -> np.ndarray:
 
 
 def _cell(value: float | None) -> object:
+    """Table cell of a threshold: "off" when the check is not used."""
     return OFF if value is None else value
 
 
 def score_setting(table: pd.DataFrame, model: str, setting: Setting) -> dict[str, object]:
+    """Score one setting on the labelled candidates.
+
+    Args:
+        table: Labelled candidates of one model.
+        model: SAM 2 size.
+        setting: Setting to apply.
+
+    Returns:
+        A row with the accepted and rejected counts and the summed gain of the accepted candidates
+        that have a gain, with their positive and negative counts; chosen is False.
+    """
+    # Apply the rule, then add the gains of the accepted candidates that were scored.
     accepted = accept_mask(table, setting.thresholds())
     gain = pd.to_numeric(table["gain"], errors="coerce").to_numpy(float)
     kept = gain[accepted]
@@ -138,9 +172,21 @@ def choose(rows: list[dict[str, object]], settings: list[Setting]) -> int | None
 
 
 def tune_model(table: pd.DataFrame, model: str) -> tuple[pd.DataFrame, VerifyThresholds]:
+    """Pick the setting of one model.
+
+    Args:
+        table: Labelled candidates of the model.
+        model: SAM 2 size.
+
+    Returns:
+        The result rows (every setting, the chosen one marked) and the chosen thresholds. When no
+        setting gains, an extra accept_nothing row is marked and the thresholds accept nothing.
+    """
+    # Score every setting of the grid.
     settings = grid()
     rows = [score_setting(table, model, s) for s in settings]
     best = choose(rows, settings)
+    # No setting gains: add an accept_nothing row and freeze that choice.
     if best is None:
         rows.append(
             {
@@ -163,16 +209,31 @@ def tune_model(table: pd.DataFrame, model: str) -> tuple[pd.DataFrame, VerifyThr
         return pd.DataFrame(rows, columns=list(RESULT_COLUMNS)), VerifyThresholds(
             -math.inf, math.inf, -math.inf, True
         )
+    # Mark the winner and return its thresholds.
     rows[best]["chosen"] = True
     return pd.DataFrame(rows, columns=list(RESULT_COLUMNS)), settings[best].thresholds()
 
 
 def read_candidates(results_dir: Path, model: str, split: str) -> pd.DataFrame:
+    """Read the labelled candidates of a model from SA-V val.
+
+    Args:
+        results_dir: Folder holding the labelled candidate files.
+        model: SAM 2 size.
+        split: Must be sav_val.
+
+    Returns:
+        The candidate table.
+
+    Raises:
+        SystemExit: If the split is not sav_val, the file is missing or columns are missing.
+    """
     if split != SPLIT:
         raise SystemExit(f"split '{split}' refused: the rule is tuned on {SPLIT} only")
     path = results_dir / labels_name(model)
     if not path.is_file():
         raise SystemExit(f"missing labelled candidates: {path}")
+    # Keep video as text so names are not turned into numbers.
     table = pd.read_csv(path, dtype={"video": str})
     needed = {"video", "cand_score", "area_ratio", "box_iou", "gain"}
     if not needed <= set(table.columns):
@@ -181,6 +242,16 @@ def read_candidates(results_dir: Path, model: str, split: str) -> pd.DataFrame:
 
 
 def check_subset(table: pd.DataFrame, model: str, subset_file: Path) -> None:
+    """Check that the Large candidates only come from the tuning subset.
+
+    Args:
+        table: Labelled candidates of the model; nothing is checked for Tiny.
+        model: SAM 2 size.
+        subset_file: File listing the allowed videos.
+
+    Raises:
+        SystemExit: If a Large candidate belongs to a video outside the subset.
+    """
     if model != "large":
         return
     outside = sorted(set(table["video"]) - set(read_names(subset_file)))
@@ -189,6 +260,14 @@ def check_subset(table: pd.DataFrame, model: str, subset_file: Path) -> None:
 
 
 def thresholds_yaml(chosen: dict[str, VerifyThresholds]) -> str:
+    """Render the chosen thresholds of all models as the text of the frozen config.
+
+    Args:
+        chosen: Thresholds per model.
+
+    Returns:
+        YAML text with kind verify and one block per model.
+    """
     body: dict[str, object] = {"kind": "verify"}
     for model in MODELS:
         t = chosen[model]
@@ -202,6 +281,21 @@ def thresholds_yaml(chosen: dict[str, VerifyThresholds]) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command line entry point: tune the verification rule on SA-V val and freeze it.
+
+    Reads the labelled candidates of both models in --results-dir. Writes the grid results to
+    --results-out and the chosen thresholds to --config-out, and prints one line per model.
+
+    Args:
+        argv: Command line arguments; None means sys.argv.
+
+    Returns:
+        Exit code 0 on success.
+
+    Raises:
+        SystemExit: If the split is not sav_val, not both models are given, the config file
+            already exists (the setting is frozen once) or an input is missing.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--models", nargs="+", default=list(MODELS))
@@ -210,12 +304,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--results-out", type=Path, default=Path("results/verify_sav_val.csv"))
     parser.add_argument("--subset-file", type=Path, default=SUBSET_FILE)
     args = parser.parse_args(argv)
+    # Guard the one-time freeze: both models together, no overwrite.
     if sorted(args.models) != sorted(MODELS):
         raise SystemExit(f"both models are tuned together: {list(MODELS)}")
     if args.config_out.exists():
         raise SystemExit(f"{args.config_out} exists: the verification setting is frozen once")
     tables: list[pd.DataFrame] = []
     chosen: dict[str, VerifyThresholds] = {}
+    # Tune each model on its labelled candidates.
     for model in MODELS:
         candidates = read_candidates(args.results_dir, model, args.split)
         check_subset(candidates, model, args.subset_file)
@@ -227,6 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"(s_min {pick['s_min']}, r_max {pick['r_max']}, b_min {pick['b_min']}), "
             f"accepted {pick['accepted']}, gain sum {pick['gain_sum']:.3f}\n"
         )
+    # Write the full grid results, then the frozen config.
     args.results_out.parent.mkdir(parents=True, exist_ok=True)
     pd.concat(tables, ignore_index=True).to_csv(args.results_out, index=False)
     args.config_out.parent.mkdir(parents=True, exist_ok=True)

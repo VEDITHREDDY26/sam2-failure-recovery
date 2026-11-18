@@ -1,3 +1,9 @@
+"""Tests for the recovery loop with a fake predictor.
+
+Checks frames are emitted once in order, re-prompts restart propagation from frame t, and
+frames before t stay unchanged.
+"""
+
 from pathlib import Path
 from typing import Any
 

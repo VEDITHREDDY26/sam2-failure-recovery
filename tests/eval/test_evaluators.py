@@ -1,3 +1,7 @@
+"""Tests that the official evaluator checkouts are pinned and unmodified, and that
+missing, modified or wrong-commit checkouts are refused.
+"""
+
 import shutil
 from pathlib import Path
 

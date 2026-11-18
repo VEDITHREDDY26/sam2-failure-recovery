@@ -1,3 +1,7 @@
+"""Tests for the per-model comparison table: gain counts, failure columns, missing inputs
+and different objects refused.
+"""
+
 import csv
 from pathlib import Path
 

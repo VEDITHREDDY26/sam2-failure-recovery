@@ -1,3 +1,5 @@
+"""Tests for the ViT tracker box sources using a fake tracker."""
+
 import hashlib
 import os
 from pathlib import Path

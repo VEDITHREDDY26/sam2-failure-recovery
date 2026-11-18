@@ -43,6 +43,17 @@ from src.sam2_runner.smoke import load_data_config
 
 
 def model_of(cfg: RecoveryRunConfig) -> str:
+    """Read the SAM 2 model size from the method name.
+
+    Args:
+        cfg: Run config whose method ends in _tiny or _large.
+
+    Returns:
+        The model name, one of MODELS.
+
+    Raises:
+        SystemExit: If the method name does not end in a known model name.
+    """
     for model in MODELS:
         if cfg.method.endswith(f"_{model}"):
             return model
@@ -53,12 +64,14 @@ def choose_verifier(
     run_cfg: RecoveryRunConfig, model: str, split: str, log_candidates: bool
 ) -> VerifyThresholds | None:
     """Frozen thresholds for a verified run; refuses the tuning split and a missing freeze."""
+    # Unverified runs need no thresholds; candidate logging belongs only to the sav_val tuning run.
     if not isinstance(run_cfg, VerifiedRunConfig):
         if log_candidates and split != "sav_val":
             raise SystemExit(f"--log-candidates is for the sav_val tuning run, not '{split}'")
         return None
     if log_candidates:
         raise SystemExit("--log-candidates is for the accept-all run, not a verified config")
+    # Thresholds are fitted on sav_val, so verified runs there would be circular.
     if split == "sav_val":
         raise SystemExit(
             "verified runs are for davis_val and sav_test; sav_val is the tuning split"
@@ -70,6 +83,17 @@ def choose_verifier(
 
 
 def choose_gate(run_cfg: RecoveryRunConfig) -> BoxGate | None:
+    """Load the box gate of a gated run.
+
+    Args:
+        run_cfg: Run config; only a gated config names a gate file.
+
+    Returns:
+        The gate, or None for an ungated run.
+
+    Raises:
+        SystemExit: If the gate file cannot be loaded.
+    """
     if not isinstance(run_cfg, GatedRunConfig):
         return None
     try:
@@ -79,6 +103,19 @@ def choose_gate(run_cfg: RecoveryRunConfig) -> BoxGate | None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Run the real system on the prompted videos (command line).
+
+    Reads the run config, the prompts file, the frozen detector rules and the data under the
+    data root (environment variable). Writes masks, events and timing under the run's output
+    folder; videos already complete are skipped. Real system only.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Raises:
+        SystemExit: If the config is an oracle or non-rules run, the detector rules are not
+            frozen, the data root is not set, or a verification or gate file is invalid.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--prompts", type=Path, required=True)
@@ -87,12 +124,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--offload-video", action="store_true")
     parser.add_argument("--log-candidates", action="store_true")
     args = parser.parse_args(argv)
+    # Refuse oracle configs: no ground truth may reach a real run.
     run_cfg = load_recovery_config(args.config)
     if run_cfg.detector != "rules" or run_cfg.box_source == "oracle":
         raise SystemExit(
             f"{args.config}: run_online is the real system only (rules detector, no oracle "
             "box); oracle runs have their own entry script"
         )
+    # Check the method name, then require the frozen detector thresholds before any run.
     check_online_method(run_cfg.method)
     if not DEFAULT_RULES_PATH.is_file():
         raise SystemExit(f"detector not frozen yet: {DEFAULT_RULES_PATH} does not exist")
@@ -100,11 +139,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error(f"{DATA_ROOT_ENV} is not set")
     model = model_of(run_cfg)
     settings = load_recovery_settings(CONFIG_PATH)
+    # A tracker mode named in the run config overrides the shared setting.
     if run_cfg.tracker_mode:
         settings = dataclasses.replace(settings, tracker_mode=run_cfg.tracker_mode)
+    # Load the data config and the prompts, then the optional verifier.
     data = load_data_config()
     prompts = load_batch_prompts(args.prompts)
     verifier = choose_verifier(run_cfg, model, prompts.split, args.log_candidates)
+    # Hand the pieces to the online runner: predictor, per-video detector and box source,
+    # box check and settings.
     run_batch(
         prompts,
         data,

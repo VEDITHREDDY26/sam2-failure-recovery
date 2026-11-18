@@ -1,3 +1,7 @@
+"""Tests for reading the stored object score from tensor-like values and condition frames,
+using fake tensors.
+"""
+
 from pathlib import Path
 
 import numpy as np

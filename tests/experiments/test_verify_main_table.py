@@ -1,3 +1,7 @@
+"""Tests for the main table with verified rows: standard table without verified files,
+verified rows follow the fix row, partial files refused.
+"""
+
 from pathlib import Path
 
 import pytest

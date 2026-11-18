@@ -39,23 +39,50 @@ class E1Error(ValueError):
 
 @dataclass(frozen=True)
 class Timing:
+    """Per-video timing of one method on one test set.
+
+    Attributes:
+        frames: Number of frames processed, by video name.
+        compute_s: Compute time in seconds, by video name.
+        hardware: Sorted distinct GPU or CPU names that produced the timings.
+    """
+
     frames: dict[str, int]
     compute_s: dict[str, float]
     hardware: tuple[str, ...]
 
 
 def _require(path: Path) -> Path:
+    """Return the path if it is an existing file.
+
+    Raises:
+        E1Error: If the file does not exist.
+    """
     if not path.is_file():
         raise E1Error(f"missing input file: {path}")
     return path
 
 
 def load_scores(path: Path) -> list[ScoreRow]:
+    """Read a per-object score CSV and check it is usable.
+
+    Args:
+        path: Scores CSV with one row per (video, object).
+
+    Returns:
+        The score rows.
+
+    Raises:
+        E1Error: If the file is missing or empty, a J or F value is NaN or outside [0, 1],
+            or a (video, object) pair appears twice.
+    """
+    # Score values are fractions: a NaN or out-of-range J or F means the scorer output is broken.
     rows = read_scores_csv(_require(path))
     for row in rows:
         for name, value in (("J", row.j), ("F", row.f)):
             if math.isnan(value) or not 0.0 <= value <= 1.0:
                 raise E1Error(f"{path}: {row.video}/{row.object} has {name}={value}, not in [0,1]")
+    # A (video, object) pair must be scored once, otherwise the means would double count it.
     keys = [(r.video, r.object) for r in rows]
     if len(set(keys)) != len(keys):
         raise E1Error(f"{path}: duplicate (video, object) rows")
@@ -65,7 +92,20 @@ def load_scores(path: Path) -> list[ScoreRow]:
 
 
 def load_timing(path: Path) -> Timing:
+    """Read a per-video timing CSV and check it is usable.
+
+    Args:
+        path: CSV with video, frames, compute_s and a gpu_name or cpu_model column.
+
+    Returns:
+        The frame counts, compute seconds and hardware names.
+
+    Raises:
+        E1Error: If the file is missing or empty, a column is missing, a video is repeated,
+            or frames or compute_s is not a positive finite number.
+    """
     _require(path)
+    # Check the header first, then validate every row while collecting the three fields.
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
         fields = reader.fieldnames or ()
@@ -95,6 +135,18 @@ def load_timing(path: Path) -> Timing:
 
 
 def summarize(rows: Sequence[ScoreRow], timing: Timing) -> dict[str, object]:
+    """Reduce one method on one test set to a single table row.
+
+    J, F and J&F are means over objects. FPS is total frames divided by total compute
+    seconds, so long videos weigh more than short ones.
+
+    Args:
+        rows: Score rows of the method.
+        timing: Timing of the same method and test set.
+
+    Returns:
+        Dict with videos, objects, J, F, J&F, fps and hardware (joined by ";").
+    """
     return {
         "videos": len({r.video for r in rows}),
         "objects": len(rows),
@@ -107,8 +159,21 @@ def summarize(rows: Sequence[ScoreRow], timing: Timing) -> dict[str, object]:
 
 
 def build_table(results_dir: Path) -> list[dict[str, object]]:
+    """Build the E1 table rows for every test set and method.
+
+    Args:
+        results_dir: Folder holding the per-method score and timing CSVs.
+
+    Returns:
+        One row per (test set, method), test sets in the outer loop.
+
+    Raises:
+        E1Error: If an input is invalid, scores and timing cover different videos, or the
+            methods scored different objects on the same test set.
+    """
     table: list[dict[str, object]] = []
     for test_set in TEST_SETS:
+        # Load and cross-check all three methods before summarising, so a mismatch fails early.
         loaded = {}
         for method in METHODS:
             rows = load_scores(results_dir / SCORE_FILES[method].format(test_set=test_set))
@@ -116,6 +181,7 @@ def build_table(results_dir: Path) -> list[dict[str, object]]:
             if {r.video for r in rows} != set(timing.frames):
                 raise E1Error(f"{method}/{test_set}: score videos differ from timing videos")
             loaded[method] = (rows, timing)
+        # Every method must score the same objects, otherwise the means are not comparable.
         reference = {(r.video, r.object) for r in loaded[METHODS[0]][0]}
         for method in METHODS[1:]:
             if {(r.video, r.object) for r in loaded[method][0]} != reference:
@@ -126,6 +192,15 @@ def build_table(results_dir: Path) -> list[dict[str, object]]:
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the table to a CSV file with the fixed column order.
+
+    The file is written to a temporary name and then renamed, so a crash never leaves a
+    half-written table. Floats are written with repr to keep full precision.
+
+    Args:
+        path: Output CSV path; parent folders are created.
+        table: Rows as produced by build_table.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -139,6 +214,15 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: build the E1 table CSV and figure.
+
+    Reads the score and timing CSVs in --results-dir (default results) and writes the table
+    to --out (default results/e1.csv) and the figure to --figure-dir (default figures).
+    Exits with status 0 on success; invalid input raises E1Error and exits non-zero.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     from experiments.e1.figure import plot_jf_fps
 
     parser = argparse.ArgumentParser(description="Build the E1 table and figure.")

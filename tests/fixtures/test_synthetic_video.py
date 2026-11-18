@@ -1,3 +1,7 @@
+"""Tests for the synthetic video fixture: frame count, image size, ground-truth ids, first
+box and the area drop during occlusion.
+"""
+
 from pathlib import Path
 
 import numpy as np

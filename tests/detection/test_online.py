@@ -1,3 +1,8 @@
+"""Tests for the streaming detector adapter used by the recovery loop.
+
+Checks it satisfies the protocol and an injected failure triggers exactly one recovery.
+"""
+
 import ast
 from typing import Any
 

@@ -38,6 +38,20 @@ Output = tuple[int, list[int], Any]
 
 
 class RecoveryRun:
+    """Streaming recovery loop for one video at a time (see the module docstring for the contract).
+
+    Attributes:
+        predictor: SAM 2 video predictor (possibly a timing wrapper around it).
+        detector: Failure detector fed SAM 2's own outputs.
+        boxes: Source of prompt boxes for flagged frames.
+        box_check: Sanity check applied to every proposed box.
+        settings: Cooldown and tracker settings.
+        verifier: Frozen thresholds for verified recovery, or None.
+        log_candidates: If True, every re-prompt candidate is logged in `candidates`.
+        gate: Box gate, or None when it is absent or both of its tests are off.
+        candidates: Candidate rows logged during the current run.
+    """
+
     def __init__(
         self,
         predictor: VideoPredictor,
@@ -49,6 +63,19 @@ class RecoveryRun:
         log_candidates: bool = False,
         gate: BoxGate | None = None,
     ) -> None:
+        """Store the parts of the loop.
+
+        Args:
+            predictor: SAM 2 video predictor.
+            detector: Failure detector.
+            boxes: Box source.
+            box_check: Box sanity check.
+            settings: Recovery settings.
+            verifier: Thresholds that accept or reject a re-prompt candidate, or None to accept all
+                boxes that pass the check.
+            log_candidates: Log candidate features even without a verifier.
+            gate: Optional gate applied before the box check; an inactive gate is dropped.
+        """
         self.gate = gate if gate is not None and gate.active else None
         self.verifier = verifier
         self.log_candidates = log_candidates
@@ -73,6 +100,7 @@ class RecoveryRun:
         """Emit frames start_frame..num_frames-1 to the sink; return the events in order."""
         if not prompts or not 0 <= start_frame < num_frames:
             raise ValueError(f"'{video}': need prompts and a start frame inside the video")
+        # Fresh detector and box-source state for every video.
         self.detector.reset()
         self.boxes.reset()
         self._video, self._start, self._prompts = video, start_frame, dict(prompts)
@@ -81,24 +109,31 @@ class RecoveryRun:
         self._reliable_area: dict[int, int] = {}
         self.candidates = []
         events: list[Event] = []
+        # Initial state: add the prompts and start propagating from the prompt frame.
         state = self.predictor.init_state(frames_dir, offload_video_to_cpu=offload_video)
         self._add_prompts(state)
         stream = self.predictor.propagate_in_video(state, start_frame_idx=start_frame)
+        # One pass over the frames; each frame is sent to the sink as soon as it is final.
         for expected in range(start_frame, num_frames):
             item = next(stream, None)
             if item is None or item[0] != expected:
                 raise RuntimeError(f"'{video}': expected frame {expected} from SAM 2")
             arrays, scores = self._unpack(state, item)
             frame = read_frame(expected)
+            # The prompt frame only seeds the detector and tracker; later frames are checked for
+            # failure.
             if expected == start_frame:
                 self._start_objects(frame, expected, arrays, scores)
             else:
                 accepted = self._decide(expected, frame, arrays, scores, events)
+                # Verified or logged re-prompts: restart, judge the candidate, and restart again if
+                # some are rejected.
                 if accepted and (self.verifier is not None or self.log_candidates):
                     stream, arrays, scores, accepted = self._restart_checked(
                         state, expected, accepted, arrays, scores, events
                     )
                     self._after_recovery(frame, expected, arrays, scores, accepted)
+                # Plain re-prompt: restart at this frame and use the new output for it.
                 elif accepted:
                     stream = self._restart(state, expected, accepted)
                     self._commit(expected, accepted)
@@ -108,24 +143,54 @@ class RecoveryRun:
         return events
 
     def _unpack(self, state: Any, item: Output) -> tuple[dict[int, Logits], dict[int, float]]:
+        """Turn one SAM 2 output into per-object logits and object scores.
+
+        Args:
+            state: SAM 2 inference state.
+            item: (frame index, object ids, logits) as yielded by propagation.
+
+        Returns:
+            (logits per object id as HxW float arrays, object score per object id).
+        """
         frame_idx, obj_ids, logits = item
         arrays = {obj: to_numpy(logits[row, 0]) for row, obj in enumerate(obj_ids)}
         scores = {obj: object_score(state, obj, frame_idx, a)[0] for obj, a in arrays.items()}
         return arrays, scores
 
     def _next(self, stream: Iterator[Output], expected: int) -> Output:
+        """Take the next item of a restarted stream and check that it is the expected frame.
+
+        Args:
+            stream: Stream returned by a restart.
+            expected: 0-based index of the frame that the restart must give first.
+
+        Returns:
+            The stream item for that frame.
+
+        Raises:
+            RuntimeError: If the stream is empty or gives another frame.
+        """
         item = next(stream, None)
         if item is None or item[0] != expected:
             raise RuntimeError(f"'{self._video}': restart did not return frame {expected}")
         return item
 
     def _add_prompts(self, state: Any) -> None:
+        """Add the first-frame box prompts of every object to a fresh inference state."""
         for obj_id, box in self._prompts.items():
             self.predictor.add_new_points_or_box(state, self._start, obj_id, box=sam2_box(box))
 
     def _start_objects(
         self, frame: Frame, index: int, arrays: dict[int, Logits], scores: dict[int, float]
     ) -> None:
+        """Start the detector history and box source from the prompt frame's masks.
+
+        Args:
+            frame: BGR image of the prompt frame.
+            index: 0-based index of the prompt frame.
+            arrays: Logits per object id.
+            scores: Object score per object id.
+        """
         for obj_id, logits in arrays.items():
             mask = logits > 0
             shape = (mask.shape[0], mask.shape[1])
@@ -141,21 +206,40 @@ class RecoveryRun:
         scores: dict[int, float],
         events: list[Event],
     ) -> dict[int, Box]:
+        """Run the detector on every object at a frame and collect the boxes to re-prompt.
+
+        Each flagged object ends in exactly one event: cooldown, tracker_lost, gated, rejected or
+        reprompted. Nothing is ever replaced by another box.
+
+        Args:
+            index: 0-based frame index.
+            frame: BGR image of this frame.
+            arrays: Logits per object id.
+            scores: Object score per object id.
+            events: List that receives the events (appended in order).
+
+        Returns:
+            Accepted box (clipped, xyxy pixels) per object id to re-prompt at this frame.
+        """
         accepted: dict[int, Box] = {}
         for obj_id, logits in arrays.items():
+            # SAM 2 logits above zero are the foreground mask.
             mask = logits > 0
             shape = (mask.shape[0], mask.shape[1])
             decision = self.detector.update(obj_id, index, mask, scores[obj_id], shape)
+            # Unflagged frames are reliable: the box source and reliable area follow them.
             if not decision.flag:
                 self.boxes.observe(obj_id, index, frame, mask)
                 self._reliable_area[obj_id] = int(np.count_nonzero(mask))
                 continue
             fired = decision.fired
+            # Cooldown: no new re-prompt within cooldown_frames of the last one for this object.
             last = self._last_reprompt.get(obj_id)
             if last is not None and index - last < self.settings.cooldown_frames:
                 events.append(Event(self._video, obj_id, index, fired, "cooldown"))
                 self.boxes.skip(obj_id, index, frame)
                 continue
+            # Ask the box source; a lost tracker is recorded, never replaced by another box.
             result = self.boxes.propose(obj_id, index, frame)
             if result.status != "ok" or result.box is None:
                 events.append(
@@ -170,6 +254,7 @@ class RecoveryRun:
                     )
                 )
                 continue
+            # Gate first (tracker score, agreement with SAM 2), then the box sanity check.
             if self.gate is not None:
                 why = self.gate.reason(result, box_from_mask(mask))
                 if why is not None:
@@ -209,10 +294,27 @@ class RecoveryRun:
         return accepted
 
     def _restart(self, state: Any, index: int, accepted: dict[int, Box]) -> Iterator[Output]:
+        """Rebuild the SAM 2 state, replay the frames before this one, prompt it and restart there.
+
+        The initial prompts and earlier recovery boxes are added again so frames before the index
+        are re-propagated exactly as before (their outputs are discarded, never written).
+
+        Args:
+            state: SAM 2 inference state, reset in place.
+            index: 0-based frame where the new boxes are added.
+            accepted: New box per object id to add at that frame.
+
+        Returns:
+            Stream of propagation from that frame on.
+
+        Raises:
+            RuntimeError: If the replay does not give every earlier frame.
+        """
         self.predictor.reset_state(state)
         self._add_prompts(state)
         for frame_idx, obj_id, box in self._recoveries:
             self.predictor.add_new_points_or_box(state, frame_idx, obj_id, box=sam2_box(box))
+        # Replay frames before the index to rebuild SAM 2's memory; outputs are counted and dropped.
         replayed = self.predictor.propagate_in_video(
             state, start_frame_idx=self._start, max_frame_num_to_track=index - 1 - self._start
         )
@@ -221,11 +323,13 @@ class RecoveryRun:
             raise RuntimeError(
                 f"'{self._video}': replay gave {count} frames, not {index - self._start}"
             )
+        # Now add the recovery boxes at the index and propagate from there.
         for obj_id, box in accepted.items():
             self.predictor.add_new_points_or_box(state, index, obj_id, box=sam2_box(box))
         return self.predictor.propagate_in_video(state, start_frame_idx=index)
 
     def _commit(self, index: int, accepted: dict[int, Box]) -> None:
+        """Remember accepted re-prompts: keep boxes for later replays and start the cooldown."""
         for obj_id, box in accepted.items():
             self._recoveries.append((index, obj_id, box))
             self._last_reprompt[obj_id] = index
@@ -242,6 +346,7 @@ class RecoveryRun:
         """Restart with every candidate box, judge each, restart again if some are rejected."""
         stream = self._restart(state, index, candidates)
         arrays, scores = self._unpack(state, self._next(stream, index))
+        # Keep the candidates that pass; rejected ones still start the cooldown.
         passed: dict[int, Box] = {}
         for obj_id, box in candidates.items():
             failed = self._judge(obj_id, index, box, flagged, flagged_scores, arrays, scores)
@@ -253,6 +358,7 @@ class RecoveryRun:
         self._commit(index, passed)
         if len(passed) == len(candidates):
             return stream, arrays, scores, passed
+        # Some candidates failed: restart again with only the passed boxes.
         stream = self._restart(state, index, passed)
         arrays, scores = self._unpack(state, self._next(stream, index))
         return stream, arrays, scores, passed
@@ -267,9 +373,24 @@ class RecoveryRun:
         arrays: dict[int, Logits],
         scores: dict[int, float],
     ) -> list[str]:
+        """Judge one candidate with the verification features and log it.
+
+        Args:
+            obj_id: Object id.
+            index: 0-based frame index of the re-prompt.
+            box: Prompt box that produced the candidate.
+            flagged: Logits per object id of the original (flagged) output.
+            flagged_scores: Object score per object id of the original output.
+            arrays: Logits per object id of the restarted output.
+            scores: Object score per object id of the restarted output.
+
+        Returns:
+            Names of the failed checks; empty when accepted or when there is no verifier.
+        """
         ratio, overlap, same = candidate_features(
             arrays[obj_id] > 0, flagged[obj_id] > 0, box, self._reliable_area.get(obj_id, 0)
         )
+        # Features come from SAM 2 outputs at this frame only; without a verifier nothing fails.
         failed = self.verifier.failed(scores[obj_id], ratio, overlap) if self.verifier else []
         self.candidates.append(
             CandidateRow(
@@ -289,6 +410,18 @@ class RecoveryRun:
 
     @staticmethod
     def _mark_rejected(events: list[Event], obj_id: int, index: int, reason: str) -> None:
+        """Change the object's "reprompted" event at this frame into "verify_rejected".
+
+        Args:
+            events: Event list of the run.
+            obj_id: Object id.
+            index: 0-based frame index.
+            reason: Comma-separated names of the failed checks.
+
+        Raises:
+            RuntimeError: If there is no matching re-prompt event.
+        """
+        # Search from the newest event backwards.
         for position in range(len(events) - 1, -1, -1):
             event = events[position]
             if (event.object_id, event.frame_index, event.action) == (obj_id, index, "reprompted"):
@@ -306,6 +439,15 @@ class RecoveryRun:
         scores: dict[int, float],
         accepted: dict[int, Box],
     ) -> None:
+        """Reset the detector history and box source on the recovered frame's masks.
+
+        Args:
+            frame: BGR image of the recovered frame.
+            index: 0-based frame index.
+            arrays: Logits per object id of the final output at this frame.
+            scores: Object score per object id.
+            accepted: Boxes that were accepted at this frame (only these objects are reset).
+        """
         for obj_id in accepted:
             mask = arrays[obj_id] > 0
             shape = (mask.shape[0], mask.shape[1])

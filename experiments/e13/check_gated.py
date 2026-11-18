@@ -35,6 +35,15 @@ CHECK_COLUMNS = ("video", "reprompts", "gated", "compared_frames", "identical")
 
 
 def check_name(method: str, split: str) -> str:
+    """Return the file name of the identity-check CSV for one method and split.
+
+    Args:
+        method: Run method name; it is passed through the online-method name check.
+        split: Split name, "davis_val" or "sav_test".
+
+    Returns:
+        File name such as e13_gated_check_<method>_<split>.csv (no directory).
+    """
     return f"e13_gated_check_{check_online_method(method)}_{split}.csv"
 
 
@@ -46,9 +55,27 @@ def check_split(
     videos: Sequence[str],
     frames_of: dict[str, list[str]],
 ) -> pd.DataFrame:
+    """Compare every video of a split with SAM 2 alone and tabulate the verdicts.
+
+    Args:
+        output_root: Root folder that holds all run outputs (masks, events).
+        method: Method name of the run being checked.
+        reference: Method name of the SAM 2 alone run used as the reference.
+        split: Split name.
+        videos: Names of the videos to check.
+        frames_of: For each video, the frame file stems in frame order.
+
+    Returns:
+        One row per video with the columns in CHECK_COLUMNS: re-prompt count, gated count, number
+        of frames compared and whether those frames are identical to SAM 2 alone.
+
+    Raises:
+        FileNotFoundError: If an events file of the run is missing.
+    """
     rows: list[tuple[object, ...]] = []
     for video in videos:
         events = read_events(output_root, method, split, video)
+        # Frames before the first re-prompt (or all frames without one) must match SAM 2 alone.
         verdict = check_video(output_root, method, reference, split, video, frames_of[video])
         rows.append(
             (
@@ -59,10 +86,27 @@ def check_split(
                 verdict.ok,
             )
         )
+    # One row per video, in the order given.
     return pd.DataFrame(rows, columns=list(CHECK_COLUMNS))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Check gated runs against SAM 2 alone for the requested splits (command line).
+
+    Reads the run config, the data config, each video's events file and the cached label maps of
+    the run and of SAM 2 alone. Writes one e13_gated_check_*.csv per split into --results-dir and
+    prints one summary line per split. Needs the data-root environment variable to be set.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 if every checked video is identical on the compared frames, 1 if any video differs, a
+        mask is missing or a split was refused.
+
+    Raises:
+        SystemExit: If the config is not a real-system run (rules detector, no oracle box).
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--splits", nargs="+", choices=SPLITS, default=list(SPLITS))
@@ -71,15 +115,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Refuse oracle or non-rule configs: this check is for the real system only.
     run_cfg = load_recovery_config(args.config)
     if run_cfg.detector != "rules" or run_cfg.box_source == "oracle":
         raise SystemExit(f"{args.config}: the check is for the real system only")
+    # The reference is the cached SAM 2 alone run of the same model size.
     reference = f"sam2_{model_of(run_cfg)}"
     data = load_data_config()
     output_root = data.data_root / data.output_root
     failed = False
+    # Check each split on its own; a missing run only fails that split.
     for split in args.splits:
         videos = split_videos(data, split, args.subset_file)
+        # Frame stems per video give the frame order used to find the masks on disk.
         stems = {v: [p.stem for p in frame_paths(frames_dir_for(data, split, v))] for v in videos}
         try:
             table = check_split(output_root, run_cfg.method, reference, split, videos, stems)
@@ -89,6 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
         args.results_dir.mkdir(parents=True, exist_ok=True)
         table.to_csv(args.results_dir / check_name(run_cfg.method, split), index=False)
+        # Videos whose compared frames differ from SAM 2 alone make the exit code 1.
         bad = table[~table["identical"]]
         untouched = int((table["reprompts"] == 0).sum())
         sys.stdout.write(

@@ -1,3 +1,7 @@
+"""Tests for the wrong re-prompt experiment: IoU below one half at the re-prompted frame,
+and refusal of SA-V val and the alone method.
+"""
+
 from pathlib import Path
 
 import pandas as pd

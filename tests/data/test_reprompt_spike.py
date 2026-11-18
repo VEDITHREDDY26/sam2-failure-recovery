@@ -1,3 +1,8 @@
+"""Tests for the re-prompt spike script using a fake predictor.
+
+Checks that re-prompting changes only frames from the prompt frame onward.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

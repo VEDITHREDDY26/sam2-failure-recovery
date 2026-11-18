@@ -1,3 +1,7 @@
+"""Tests for failure labels: hand-computed IoU, empty masks, strict threshold at 0.5 and
+rows covering every frame of every object.
+"""
+
 from pathlib import Path
 
 import numpy as np

@@ -17,6 +17,8 @@ from src.common.masks import MAX_OBJECT_ID, BoolMask
 
 
 class GtReader(Protocol):
+    """Interface of a dataset-specific reader that returns ground-truth masks on demand."""
+
     def annotated_frames(self, obj_id: int) -> tuple[int, ...]:
         """Ascending frame indices with ground truth for this object."""
         ...
@@ -28,6 +30,13 @@ class GtReader(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class PromptBox:
+    """First-frame prompt for an object.
+
+    Attributes:
+        frame_index: 0-based index of the frame the box comes from.
+        box: Tight box (x0, y0, x1, y1) in pixels around the object's mask on that frame.
+    """
+
     frame_index: int
     box: Box
 
@@ -47,6 +56,20 @@ def sort_stems(names: Iterable[str]) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True, eq=False)
 class VideoSample:
+    """One video with its frames and lazily read ground truth, independent of the dataset.
+
+    Attributes:
+        dataset: Dataset name ("davis" or "sav").
+        split: Split name.
+        name: Video name.
+        frames_dir: Folder holding the frame images.
+        frame_stems: Numeric frame file names without extension, in playing order.
+        object_ids: Object ids in the video (1 to MAX_OBJECT_ID), unique and ascending.
+        object_names: Original dataset name of each object id.
+        reader: Reader that provides annotated frame indices and masks.
+        frame_suffix: File extension of the frame images.
+    """
+
     dataset: str
     split: str
     name: str
@@ -58,8 +81,10 @@ class VideoSample:
     frame_suffix: str = ".jpg"
 
     def __post_init__(self) -> None:
+        """Validate frames, object ids and object names; raise ValueError if inconsistent."""
         if not self.frame_stems:
             raise ValueError(f"video '{self.name}' has no frames")
+        # Object ids must be unique and ascending and fit in the indexed mask PNG range.
         if list(self.object_ids) != sorted(set(self.object_ids)):
             raise ValueError(f"object ids must be unique and ascending: {self.object_ids}")
         for obj_id in self.object_ids:
@@ -70,21 +95,42 @@ class VideoSample:
 
     @property
     def num_frames(self) -> int:
+        """Number of frames in the video."""
         return len(self.frame_stems)
 
     def frame_path(self, frame_index: int) -> Path:
+        """Return the image path of a frame.
+
+        Args:
+            frame_index: 0-based frame index.
+
+        Raises:
+            IndexError: If the index is outside the video.
+        """
         self._check_frame(frame_index)
         return self.frames_dir / f"{self.frame_stems[frame_index]}{self.frame_suffix}"
 
     def annotated_frames(self, obj_id: int) -> tuple[int, ...]:
+        """Return the ascending 0-based indices of frames with ground truth for an object.
+
+        Raises:
+            KeyError: If the object id is not in the video.
+        """
         self._check_object(obj_id)
         return self.reader.annotated_frames(obj_id)
 
     def is_annotated(self, obj_id: int, frame_index: int) -> bool:
+        """Return True if the object has ground truth on this 0-based frame."""
         self._check_frame(frame_index)
         return frame_index in self.annotated_frames(obj_id)
 
     def gt_mask(self, obj_id: int, frame_index: int) -> BoolMask | None:
+        """Return the ground-truth mask of an object on a frame.
+
+        Returns:
+            A boolean HxW mask (all False if the object is absent), or None if the frame is not
+            annotated for this object.
+        """
         if not self.is_annotated(obj_id, frame_index):
             return None
         return self.reader.read_mask(obj_id, frame_index)
@@ -101,6 +147,7 @@ class VideoSample:
     def first_box(self, obj_id: int) -> PromptBox:
         """Tight box of the object's first annotated frame where it is visible."""
         for frame_index in self.annotated_frames(obj_id):
+            # Skip annotated frames where the object is absent (empty mask).
             box = box_from_mask(self.reader.read_mask(obj_id, frame_index))
             if box is not None:
                 return PromptBox(frame_index, box)
@@ -109,9 +156,11 @@ class VideoSample:
         )
 
     def _check_frame(self, frame_index: int) -> None:
+        """Raise IndexError if the frame index is outside the video."""
         if not 0 <= frame_index < self.num_frames:
             raise IndexError(f"frame {frame_index} outside 0..{self.num_frames - 1}")
 
     def _check_object(self, obj_id: int) -> None:
+        """Raise KeyError if the object id is not in the video."""
         if obj_id not in self.object_names:
             raise KeyError(f"{self.name}: unknown object id {obj_id}")

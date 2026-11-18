@@ -32,6 +32,11 @@ class Prompts:
     object_frames: dict[int, int] = field(default_factory=dict)
 
     def start_frame(self, obj_id: int) -> int:
+        """Return the 0-based frame at which this object is prompted.
+
+        Args:
+            obj_id: Object id; objects without their own frame use the default frame_index.
+        """
         return self.object_frames.get(obj_id, self.frame_index)
 
     def groups(self) -> dict[int, list[int]]:
@@ -44,21 +49,57 @@ class Prompts:
 
 @dataclass(frozen=True)
 class BatchPrompts:
+    """Prompts for many videos of one split.
+
+    Attributes:
+        split: Split name (for example "davis_val").
+        videos: Prompts per video name.
+    """
+
     split: str
     videos: dict[str, Prompts]
 
 
 def parse_prompts(raw: Mapping[str, Any]) -> Prompts:
+    """Build the prompts of a single video from its parsed JSON.
+
+    Args:
+        raw: Mapping with "video", optional "frame_index" and "boxes" (see the module docstring).
+
+    Returns:
+        The video's Prompts.
+
+    Raises:
+        ValueError: If a box or frame index is malformed or there are no boxes.
+    """
     return _parse_video(str(raw["video"]), raw)
 
 
 def _parse_box(key: str, coords: Any) -> Box:
+    """Convert four coordinates to a Box (integers, right and bottom edges exclusive).
+
+    Args:
+        key: Object id as written in the JSON, used in error messages.
+        coords: Sequence of four numbers x0, y0, x1, y1.
+
+    Raises:
+        ValueError: If there are not exactly four numbers.
+    """
     if len(coords) != 4:
         raise ValueError(f"box for object {key} needs 4 numbers, got {coords}")
     return Box(*(int(v) for v in coords))
 
 
 def _parse_frame(key: str, value: Any) -> int:
+    """Convert a frame index to a non-negative int.
+
+    Args:
+        key: Object id or "video", used in error messages.
+        value: The 0-based frame index as written in the JSON.
+
+    Raises:
+        ValueError: If the index is negative.
+    """
     frame = int(value)
     if frame < 0:
         raise ValueError(f"object {key}: frame_index must be >= 0, got {frame}")
@@ -66,8 +107,24 @@ def _parse_frame(key: str, value: Any) -> int:
 
 
 def _parse_video(video: str, raw: Mapping[str, Any]) -> Prompts:
+    """Build one video's Prompts from its JSON entry.
+
+    Args:
+        video: Video name.
+        raw: Mapping with "boxes" and optionally a video-level "frame_index". A box entry is a
+            plain [x0, y0, x1, y1] list or a mapping with its own "frame_index" and "box".
+
+    Returns:
+        Prompts whose default frame is the video-level index, or the earliest per-object frame
+        when every entry has its own.
+
+    Raises:
+        ValueError: If there are no boxes, an entry lacks a key, or plain boxes have no
+            video-level frame index.
+    """
     boxes: dict[int, Box] = {}
     own_frames: dict[int, int] = {}
+    # Read every object's box and, when given, its own prompt frame.
     for key, entry in raw["boxes"].items():
         if isinstance(entry, Mapping):
             if "box" not in entry or "frame_index" not in entry:
@@ -78,6 +135,7 @@ def _parse_video(video: str, raw: Mapping[str, Any]) -> Prompts:
             boxes[int(key)] = _parse_box(key, entry)
     if not boxes:
         raise ValueError(f"prompts for '{video}' contain no boxes")
+    # The default frame is the video-level index, else the earliest per-object frame.
     if "frame_index" in raw:
         default = _parse_frame("video", raw["frame_index"])
     elif len(own_frames) == len(boxes):
@@ -88,11 +146,28 @@ def _parse_video(video: str, raw: Mapping[str, Any]) -> Prompts:
 
 
 def load_prompts(path: Path) -> Prompts:
+    """Read a single-video prompts JSON file.
+
+    Args:
+        path: Path of the JSON file.
+    """
     return parse_prompts(json.loads(path.read_text()))
 
 
 def parse_batch_prompts(raw: Mapping[str, Any]) -> BatchPrompts:
+    """Build the prompts of many videos from parsed JSON.
+
+    Args:
+        raw: Mapping with "split" and "videos" (video name -> entry, see the module docstring).
+
+    Returns:
+        BatchPrompts with a validated split and validated video names.
+
+    Raises:
+        ValueError: If there are no videos or an entry is malformed.
+    """
     split = validate_split(str(raw["split"]))
+    # Parse each video's entry; names are validated so they are safe in paths.
     videos = {
         validate_name(name, "video"): _parse_video(name, entry)
         for name, entry in raw["videos"].items()
@@ -103,4 +178,9 @@ def parse_batch_prompts(raw: Mapping[str, Any]) -> BatchPrompts:
 
 
 def load_batch_prompts(path: Path) -> BatchPrompts:
+    """Read a many-video prompts JSON file.
+
+    Args:
+        path: Path of the JSON file.
+    """
     return parse_batch_prompts(json.loads(path.read_text()))

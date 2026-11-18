@@ -29,10 +29,12 @@ RESULTS_DIR = REPO_ROOT / "results"
 
 
 def score_path(results_dir: Path, model: str, split: str) -> Path:
+    """Path of a run's score CSV: <results_dir>/sam2_<model>_<split>.csv."""
     return results_dir / f"sam2_{model}_{split}.csv"
 
 
 def timing_csv_path(results_dir: Path, model: str, split: str) -> Path:
+    """Path of a run's timing CSV: <results_dir>/sam2_<model>_timing_<split>.csv."""
     return results_dir / f"sam2_{model}_timing_{split}.csv"
 
 
@@ -45,16 +47,19 @@ def score_run(model: str, split: str, results_dir: Path, subset_file: Path, pref
     if check.missing:
         sys.stdout.write("\n".join(check.lines()) + f"\n{name}: refused, run is not complete\n")
         return False
+    # SA-V test is scored on the seeded subset, not on every video in the folder.
     videos = split_videos(cfg, split, subset_file)
     output_root = cfg.data_root / cfg.output_root
     dataset = "davis" if split == "davis_val" else "sav"
     pred_root = run_dir(output_root, method, split) / "masks"
+    # Scoring or timing problems refuse the run instead of writing partial results.
     try:
         rows = score(cfg, dataset, split, pred_root, videos)
         timing = collect_timing(output_root, method, split, videos)
     except (ScoringError, FileNotFoundError) as error:
         sys.stdout.write(f"{name}: refused, {error}\n")
         return False
+    # Only now, after everything succeeded, are the result files written.
     write_scores_csv(score_path(results_dir, model, split), rows)
     out = timing_csv_path(results_dir, model, split)
     timing.to_csv(out, index=False)
@@ -68,6 +73,18 @@ def score_run(model: str, split: str, results_dir: Path, subset_file: Path, pref
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point: score and collect timing for every requested model and split.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 if every run was scored, 1 if any run was refused.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments or when the data-root environment
+            variable is not set.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--splits", nargs="+", choices=SPLIT_NAMES, default=list(SPLIT_NAMES))
@@ -77,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Count refused runs so the exit status tells whether anything is missing.
     refused = 0
     for model in args.models:
         for split in args.splits:

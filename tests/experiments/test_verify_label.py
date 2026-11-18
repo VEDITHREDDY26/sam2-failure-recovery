@@ -1,3 +1,7 @@
+"""Tests for labelling verification candidates: gain is method IoU minus alone IoU at the
+first annotated frame, with unscored and missing cases handled.
+"""
+
 from pathlib import Path
 
 import pandas as pd

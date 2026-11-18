@@ -1,3 +1,7 @@
+"""Tests for the E1 baseline comparison table: hand-computed values, hardware columns
+and CSV row order.
+"""
+
 from __future__ import annotations
 
 import csv

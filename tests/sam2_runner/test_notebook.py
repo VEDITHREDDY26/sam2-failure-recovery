@@ -1,3 +1,5 @@
+"""Tests that the smoke-run notebook is valid and runs the smoke test for both models."""
+
 import json
 
 from src.sam2_runner.predictor import REPO_ROOT

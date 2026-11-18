@@ -1,3 +1,7 @@
+"""Tests for the scoring command line: stored method predictions, explicit prediction
+directories, incomplete input, and exclusive or mismatched options.
+"""
+
 from pathlib import Path
 
 import pytest

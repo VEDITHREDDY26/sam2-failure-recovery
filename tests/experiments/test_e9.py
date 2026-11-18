@@ -1,3 +1,7 @@
+"""Tests for the box-noise experiment: components and spread columns, uncounted warm-up
+pass, nothing written to the output root and seeded sampling.
+"""
+
 from pathlib import Path
 
 import pandas as pd

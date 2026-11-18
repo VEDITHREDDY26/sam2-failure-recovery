@@ -1,3 +1,7 @@
+"""Tests for the full-system results table: counts and means by hand, delta as fix minus
+alone, the unchanged boundary and refusal of different objects.
+"""
+
 from pathlib import Path
 
 import pandas as pd

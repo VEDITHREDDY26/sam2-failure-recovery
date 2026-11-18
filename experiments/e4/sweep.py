@@ -63,6 +63,15 @@ COLUMNS = (
 
 
 def with_frozen(grid: Sequence[float], value: float) -> list[float]:
+    """Return the sorted grid with the frozen value added if it is not already there.
+
+    Args:
+        grid: Threshold values to sweep.
+        value: The frozen threshold, which must always be a grid point.
+
+    Returns:
+        Sorted list of the distinct grid values and the frozen value.
+    """
     return sorted({*grid, value})
 
 
@@ -75,7 +84,23 @@ def _row(
     truth: BoolArray,
     frozen: RuleThresholds,
 ) -> dict[str, object]:
+    """Build one result row of the sweep from the window-level detector output.
+
+    Args:
+        model: SAM 2 model name.
+        swept: Which sweep the row belongs to ("score_threshold", "area_ratio" or "both").
+        score: Score threshold used for this point.
+        area: Area-ratio threshold used for this point.
+        hit: Per window, True if the detector flagged any frame in the window.
+        truth: Per window, True if the failure label at the window's annotated frame is set.
+        frozen: Frozen thresholds; the row is marked frozen when both values equal them.
+
+    Returns:
+        Dictionary with the COLUMNS keys: window counts, precision, recall, F1 and the flag.
+    """
     flagged, tp, positives = int(hit.sum()), int((hit & truth).sum()), int(truth.sum())
+    # One sweep point: a window is flagged if the swept rules fire; precision, recall and F1
+    # are counted over windows.
     denominator = flagged + positives
     return {
         "model": model,
@@ -96,11 +121,25 @@ def _row(
 def sweep_model(
     model: str, table: pd.DataFrame, labels: pd.DataFrame, frozen: RuleThresholds
 ) -> list[dict[str, object]]:
+    """Sweep the score and area thresholds for one model on the SA-V val windows.
+
+    Args:
+        model: SAM 2 model name.
+        table: Joined per-frame signals and boxes of SA-V val.
+        labels: Failure labels of the annotated frames.
+        frozen: Frozen thresholds; the jump, disappearance and border thresholds stay fixed.
+
+    Returns:
+        Rows for three sweeps: the score threshold alone, the area ratio alone, and the 2-D
+        grid of both.
+    """
+    # Windows and the per-frame evidence are the same as in the tuning.
     windows: Windows = build_windows(table, labels)
     ev = batch_evidence(table)
     score, ratio, jump = (ev[c].to_numpy(dtype=float) for c in ("score", "area_ratio", "jump"))
     fraction = ev["prev_area_fraction"].to_numpy(dtype=float)
     margin = ev["prev_margin"].to_numpy(dtype=float)
+    # Frame-level conditions that do not change: centre jump and disappearance.
     with np.errstate(invalid="ignore"):
         fixed = (jump > frozen.jump_ratio) | (
             (fraction >= frozen.min_area_fraction) & (margin >= frozen.border_margin_px)
@@ -109,18 +148,22 @@ def sweep_model(
         area_grid = with_frozen(AREA_RATIO_GRID, frozen.area_ratio)
         low = {v: window_any(score < v, windows) for v in score_grid}
         area = {v: window_any(ratio > v, windows) for v in area_grid}
+    # Per-window flags are OR-ed, so each rule is reduced to windows once and reused.
     rest = window_any(fixed, windows)
     rows = []
+    # Sweep 1: score threshold varies, the area ratio stays frozen.
     for v in score_grid:
         rows.append(
             _row(model, "score_threshold", v, frozen.area_ratio,
                  low[v] | area[frozen.area_ratio] | rest, windows.truth, frozen)
         )  # fmt: skip
+    # Sweep 2: area ratio varies, the score threshold stays frozen.
     for v in area_grid:
         rows.append(
             _row(model, "area_ratio", frozen.score_threshold, v,
                  low[frozen.score_threshold] | area[v] | rest, windows.truth, frozen)
         )  # fmt: skip
+    # Sweep 3: every combination of the two thresholds.
     for s in score_grid:
         for a in area_grid:
             rows.append(_row(model, "both", s, a, low[s] | area[a] | rest, windows.truth, frozen))
@@ -134,14 +177,32 @@ def run(
     out: Path,
     expect_videos: int = EXPECTED_VIDEOS,
 ) -> pd.DataFrame:
+    """Run the sweeps for the requested models and write the E4 table.
+
+    Args:
+        models: SAM 2 model names to sweep.
+        data_dir: Folder with the SA-V val export used for tuning.
+        rules_path: Frozen rules config.
+        out: Output CSV path.
+        expect_videos: Number of SA-V val videos the export must contain.
+
+    Returns:
+        The table that was written.
+
+    Raises:
+        TuneInputError: If the rules config does not exist or the export is not the expected
+            SA-V val data.
+    """
     if not rules_path.is_file():
         raise TuneInputError(f"detector not frozen yet: {rules_path} does not exist")
     rows: list[dict[str, object]] = []
+    # Detector level only: load the export, sweep around the frozen point.
     for model in models:
         table, labels = load_model_inputs(data_dir, model, expect_videos)
         rows += sweep_model(model, table, labels, load_rules_config(model, rules_path))
     frame = pd.DataFrame(rows, columns=list(COLUMNS))
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temporary file first, then replace the target in one step.
     temp = out.with_name(out.name + ".tmp")
     frame.to_csv(temp, index=False)
     os.replace(temp, out)
@@ -149,6 +210,19 @@ def run(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point for the E4 threshold sweep.
+
+    Reads the SA-V val export (--data-dir, or the tune_rules folder under the data-root
+    environment variable) and the frozen rules config, and writes the sweep table to --out. Prints
+    the frozen point's precision, recall and F1 for each model.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if the input is refused or cannot be read. A missing data folder makes
+        argparse exit with code 2.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--data-dir", type=Path, default=None)
@@ -156,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("results/e4.csv"))
     parser.add_argument("--expect-videos", type=int, default=EXPECTED_VIDEOS)
     args = parser.parse_args(argv)
+    # Find the tuning data from --data-dir or the data root, then run the sweep.
     root = os.environ.get(DATA_ROOT_ENV)
     data_dir = args.data_dir or (Path(root) / "tune_rules" if root else None)
     if data_dir is None:
@@ -165,6 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TuneInputError, ValueError, OSError) as error:
         sys.stdout.write(f"e4 sweep: refused: {error}\n")
         return 1
+    # Print the frozen operating point so it can be compared with the sweep by eye.
     for _, row in frame[frame["frozen"] & (frame["swept"] == "both")].iterrows():
         sys.stdout.write(
             f"{row['model']} ({SPLIT}) frozen point: precision={row['precision']:.3f} "

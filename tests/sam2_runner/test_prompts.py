@@ -1,3 +1,7 @@
+"""Tests for the prompt file format: plain and per-object forms, optional video frame,
+bad boxes rejected and the batch file round trip.
+"""
+
 import json
 from pathlib import Path
 

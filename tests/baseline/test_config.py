@@ -1,3 +1,5 @@
+"""Tests for the CSRT + GrabCut baseline config: shipped values, registration, bad keys."""
+
 from pathlib import Path
 
 import pytest

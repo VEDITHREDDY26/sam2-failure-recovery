@@ -1,3 +1,7 @@
+"""Tests for tuning the detector rules on SA-V val: fixed grids, window construction,
+flags on unannotated frames and precision, recall and F1 by hand.
+"""
+
 from pathlib import Path
 
 import numpy as np

@@ -1,3 +1,7 @@
+"""Tests for the baseline batch script: skipping finished videos, redoing incomplete ones,
+rejecting unknown videos, the SA-V subset and the timing CSV.
+"""
+
 from pathlib import Path
 
 import pandas as pd
