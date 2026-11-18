@@ -52,6 +52,15 @@ class SelectionError(ValueError):
 
 @dataclass(frozen=True)
 class Pick:
+    """One selected video.
+
+    Attributes:
+        role: improved, worse or median.
+        rank: 1-based rank inside the role.
+        video: Video name.
+        delta: J&F of the fix minus J&F of SAM 2 alone.
+    """
+
     role: str
     rank: int
     video: str
@@ -62,12 +71,14 @@ def select_videos(deltas: dict[str, float], per_role: int = PER_ROLE) -> list[Pi
     """The written rule on a video -> delta table."""
     if not deltas:
         raise SelectionError("no videos to select from")
+    # Sort with the video name as tie-break so the selection is deterministic.
     by_gain = sorted(deltas, key=lambda v: (-deltas[v], v))
     improved = [v for v in by_gain if deltas[v] >= UNCHANGED_TOL][:per_role]
     worse = sorted((v for v in deltas if deltas[v] <= -UNCHANGED_TOL), key=lambda v: (deltas[v], v))
     worse = worse[:per_role]
     picks = [Pick("improved", i + 1, v, deltas[v]) for i, v in enumerate(improved)]
     picks += [Pick("worse", i + 1, v, deltas[v]) for i, v in enumerate(worse)]
+    # The median pick is the video closest to the overall median among those not yet taken.
     taken = {p.video for p in picks}
     rest = {v: d for v, d in deltas.items() if v not in taken}
     if rest:
@@ -78,6 +89,11 @@ def select_videos(deltas: dict[str, float], per_role: int = PER_ROLE) -> list[Pi
 
 
 def _read(path: Path) -> pd.DataFrame:
+    """Read a results CSV, keeping video names as text.
+
+    Raises:
+        SelectionError: If the file does not exist.
+    """
     if not path.is_file():
         raise SelectionError(f"missing input file: {path}")
     return pd.read_csv(path, dtype={"video": str})
@@ -97,13 +113,29 @@ def clip_frame(video: str, events: pd.DataFrame, timing: pd.DataFrame) -> tuple[
 def selection_for_split(
     results_dir: Path, split: str, alone: str, fix: str
 ) -> list[dict[str, object]]:
+    """Select the clips of one test set and describe each with its source files.
+
+    Args:
+        results_dir: Folder with the score, events and timing CSVs.
+        split: Test set name.
+        alone: Method name of SAM 2 alone.
+        fix: Method name of the fixed run.
+
+    Returns:
+        One row dict per selected clip with the SELECTION_COLUMNS keys.
+
+    Raises:
+        SelectionError: If a file is missing or the two runs scored different videos.
+    """
     alone_file, fix_file = f"{alone}_{split}.csv", f"{fix}_{split}.csv"
     events_file, timing_file = f"events_{fix}_{split}.csv", f"{fix}_timing_{split}.csv"
+    # Per-video J&F of both runs; they must cover the same videos.
     jf_alone = per_video_jf(load_scores(results_dir / alone_file))
     jf_fix = per_video_jf(load_scores(results_dir / fix_file))
     if set(jf_alone) != set(jf_fix):
         raise SelectionError(f"{split}: SAM 2 alone and the fix scored different videos")
     events, timing = _read(results_dir / events_file), _read(results_dir / timing_file)
+    # Apply the rule, then choose the frame to show for each pick.
     deltas = {v: jf_fix[v] - jf_alone[v] for v in jf_alone}
     rows: list[dict[str, object]] = []
     for pick in select_videos(deltas):
@@ -131,6 +163,17 @@ def selection_for_split(
 
 
 def build_selection(results_dir: Path, splits: Sequence[str], alone: str, fix: str) -> pd.DataFrame:
+    """Select clips for all requested test sets.
+
+    Args:
+        results_dir: Folder with the result CSVs.
+        splits: Test set names.
+        alone: Method name of SAM 2 alone.
+        fix: Method name of the fixed run.
+
+    Returns:
+        Table with the SELECTION_COLUMNS columns.
+    """
     validate_method(alone)
     validate_method(fix)
     rows = [r for s in splits for r in selection_for_split(results_dir, s, alone, fix)]
@@ -138,6 +181,15 @@ def build_selection(results_dir: Path, splits: Sequence[str], alone: str, fix: s
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: write the E10 clip selection CSV.
+
+    Reads the E2 result CSVs for --alone and --fix on each of --splits from --results-dir
+    (default results) and writes the selection to --out (default results/e10_selection.csv).
+    Exits 0 on success; invalid input raises SelectionError and exits non-zero.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--splits", nargs="+", default=list(SPLITS))

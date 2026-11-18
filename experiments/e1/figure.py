@@ -19,15 +19,27 @@ LABEL_OFFSET = 0.01
 
 
 def read_table(path: Path) -> list[dict[str, str]]:
+    """Read a CSV file into a list of rows, each a column-name -> text dict."""
     with path.open(newline="") as handle:
         return list(csv.DictReader(handle))
 
 
 def plot_jf_fps(table_path: Path, figure_dir: Path) -> Path:
+    # Keep first-seen order of test sets and methods so groups and colours are stable.
+    """Draw the grouped J&F bar chart with FPS labels and save it as a PNG.
+
+    Args:
+        table_path: E1 table CSV with method, test_set, J&F and fps columns.
+        figure_dir: Folder for the figure; created if missing.
+
+    Returns:
+        Path of the saved figure file.
+    """
     rows = read_table(table_path)
     test_sets = list(dict.fromkeys(r["test_set"] for r in rows))
     methods = list(dict.fromkeys(r["method"] for r in rows))
     by_key = {(r["method"], r["test_set"]): r for r in rows}
+    # One bar per method inside each test-set group, centred on the group tick.
     fig, ax = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
     offset = (len(methods) - 1) / 2
     for i, method in enumerate(methods):
@@ -37,6 +49,7 @@ def plot_jf_fps(table_path: Path, figure_dir: Path) -> Path:
         ax.bar(xs, heights, BAR_WIDTH, label=method)
         for x, h, r in zip(xs, heights, picked, strict=True):
             ax.text(x, h + LABEL_OFFSET, f"{float(r['fps']):.2f} FPS", ha="center", fontsize=7)
+    # Axis labels, legend below the plot, then save and release the figure.
     ax.set_xticks(range(len(test_sets)), test_sets)
     ax.set_xlabel("Test set")
     ax.set_ylabel("J&F (mean over objects)")

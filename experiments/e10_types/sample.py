@@ -70,6 +70,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def check_outside_repo(path: Path) -> Path:
+    """Return the path unchanged if it lies outside the repository.
+
+    Raises:
+        SystemExit: If the path is the repository root or inside it (clips must not be committed).
+    """
     resolved = path.resolve()
     if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
         raise SystemExit(f"{path} is inside the repository; write the clips outside it")
@@ -77,6 +82,16 @@ def check_outside_repo(path: Path) -> Path:
 
 
 def read_events(results_dir: Path, split: str) -> pd.DataFrame:
+    """Read the event log of the rule-triggered fix run on one test set.
+
+    Args:
+        results_dir: Folder with the events CSVs.
+        split: Test set name.
+
+    Raises:
+        FileNotFoundError: If the events file is missing.
+        ValueError: If its columns differ from EVENT_COLUMNS.
+    """
     path = results_dir / f"events_{FIX_METHOD}_{split}.csv"
     if not path.is_file():
         raise FileNotFoundError(f"missing events file: {path}")
@@ -101,13 +116,30 @@ def label_frame(video: VideoSample, obj_id: int, frame_index: int) -> int | None
 def build_candidates(
     results_dir: Path, output_root: Path, load_video: LoadVideo, splits: Sequence[str] = SPLITS
 ) -> pd.DataFrame:
+    """List flagged failures: trigger events where SAM 2 alone is wrong.
+
+    For every trigger event the ground truth is looked up at that frame (or the next annotated
+    one), and the event is kept when the IoU of the SAM 2 alone mask there counts as a failure.
+
+    Args:
+        results_dir: Folder with the events CSVs.
+        output_root: Folder holding the saved SAM 2 masks.
+        load_video: Function (split, name) -> VideoSample.
+        splits: Test sets to scan.
+
+    Returns:
+        Candidates sorted by split, video, object and frame, with action, fired, the ground-truth
+        frame index used and the IoU.
+    """
     rows: list[dict[str, object]] = []
     for split in splits:
+        # Videos are loaded once per split and reused for all their events.
         loaded: dict[str, VideoSample] = {}
         for event in triggers(read_events(results_dir, split)).itertuples():
             name = str(event.video)
             obj_id, frame = int(cast(int, event.object_id)), int(cast(int, event.frame_index))
             video = loaded.setdefault(name, load_video(split, name))
+            # Skip events with no ground truth to judge against.
             gt_frame = label_frame(video, obj_id, frame)
             if gt_frame is None:
                 continue
@@ -116,6 +148,7 @@ def build_candidates(
                 continue
             stem = video.frame_stems[gt_frame]
             alone = read_label_map(mask_path(output_root, ALONE_METHOD, split, name, stem))
+            # Keep the event only if SAM 2 alone really failed at the judged frame.
             iou = mask_iou(alone == obj_id, gt)
             if is_failure(iou):
                 rows.append(
@@ -144,30 +177,57 @@ def draw_sample(candidates: pd.DataFrame, size: int = SAMPLE_SIZE) -> pd.DataFra
 
 
 def clip_indices(frame_index: int, num_frames: int) -> list[int]:
+    """Return the strip frames: every CLIP_STEP frames within CLIP_RADIUS of frame_index.
+
+    Args:
+        frame_index: Centre frame of the strip.
+        num_frames: Number of frames in the video; indices outside 0..num_frames-1 are dropped.
+    """
     wanted = range(frame_index - CLIP_RADIUS, frame_index + CLIP_RADIUS + 1, CLIP_STEP)
     return [i for i in wanted if 0 <= i < num_frames]
 
 
 def _outline(canvas: Image, mask: npt.NDArray[np.bool_], colour: tuple[int, int, int]) -> None:
+    """Draw the outer contour of a boolean mask onto the BGR canvas in place."""
     found, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(canvas, found, -1, colour, LINE_WIDTH)
 
 
 def _fit(mask: npt.NDArray[np.bool_], width: int, height: int) -> npt.NDArray[np.bool_]:
+    """Resize a boolean mask to (width, height) with nearest-neighbour sampling."""
     resized = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
     return np.asarray(resized, dtype=bool)
 
 
 def _label(frame: Image, text: str, bottom_offset: int, colour: tuple[int, int, int]) -> None:
+    """Write a small text line near the bottom-left of the frame, raised by bottom_offset pixels."""
     origin = (6, frame.shape[0] - 8 - bottom_offset)
     cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, SMALL_FONT, colour, 1, cv2.LINE_AA)
 
 
 def _thumb(video: VideoSample, alone_dir: Path, row: pd.Series, index: int) -> Image:
+    """Render one annotated thumbnail of the strip.
+
+    Draws the SAM 2 alone outline (green), the ground-truth outline (yellow, if annotated) and,
+    at the flagged frame only, the tracker box (orange) and a red border.
+
+    Args:
+        video: The loaded video.
+        alone_dir: Folder holding the saved SAM 2 masks.
+        row: Sample row with split, object_id, frame_index and optional box_x0..box_y1.
+        index: Zero-based frame index of this thumbnail.
+
+    Returns:
+        BGR image THUMB_WIDTH pixels wide.
+
+    Raises:
+        OSError: If the frame image cannot be read.
+    """
     image = cv2.imread(str(video.frame_path(index)), cv2.IMREAD_COLOR)
     if image is None:
         raise OSError(f"cannot read frame {video.frame_path(index)}")
     source = np.asarray(image, dtype=np.uint8)
+    # Shrink to a fixed width; masks and boxes are scaled by the same factor.
     scale = THUMB_WIDTH / source.shape[1]
     width, height = THUMB_WIDTH, max(1, int(source.shape[0] * scale))
     frame: Image = np.asarray(cv2.resize(source, (width, height)), dtype=np.uint8)
@@ -177,6 +237,7 @@ def _thumb(video: VideoSample, alone_dir: Path, row: pd.Series, index: int) -> I
     label = read_label_map(mask_path(alone_dir, ALONE_METHOD, str(row["split"]), video.name, stem))
     alone = _fit(label == obj_id, width, height)
     _outline(frame, alone, GREEN)
+    # Overlay outlines first, then text notes for empty or missing masks.
     gt = video.gt_mask(obj_id, index)
     if gt is not None:
         _outline(frame, _fit(np.asarray(gt, dtype=bool), width, height), YELLOW)
@@ -198,6 +259,7 @@ def _thumb(video: VideoSample, alone_dir: Path, row: pd.Series, index: int) -> I
 
 
 def _legend(sample_id: str, width: int) -> Image:
+    """Build the colour-key banner shown above the strip, with the sample id."""
     band = np.zeros((LEGEND_HEIGHT, width, 3), dtype=np.uint8)
     parts = (
         (f"{sample_id}   ", WHITE),
@@ -215,6 +277,17 @@ def _legend(sample_id: str, width: int) -> Image:
 
 
 def render_strip(row: pd.Series, video: VideoSample, output_root: Path, path: Path) -> Path:
+    """Save the strip of frames around a flagged frame as one PNG.
+
+    Args:
+        row: Sample row (with optional box columns).
+        video: The loaded video.
+        output_root: Folder holding the saved SAM 2 masks.
+        path: Output PNG path; parent folders are created.
+
+    Returns:
+        The path that was written.
+    """
     thumbs = [
         _thumb(video, output_root, row, i)
         for i in clip_indices(int(row["frame_index"]), video.num_frames)
@@ -222,6 +295,7 @@ def render_strip(row: pd.Series, video: VideoSample, output_root: Path, path: Pa
     height, width = thumbs[0].shape[:2]
     rows = [_legend(str(row["sample_id"]), width * STRIP_COLUMNS)]
     for start in range(0, len(thumbs), STRIP_COLUMNS):
+        # Lay thumbnails out in rows of STRIP_COLUMNS, padding the last row with black.
         chunk = thumbs[start : start + STRIP_COLUMNS]
         chunk += [np.zeros((height, width, 3), dtype=np.uint8)] * (STRIP_COLUMNS - len(chunk))
         rows.append(np.hstack(chunk))
@@ -231,6 +305,7 @@ def render_strip(row: pd.Series, video: VideoSample, output_root: Path, path: Pa
 
 
 def write_csv(path: Path, columns: Sequence[str], rows: Sequence[Sequence[object]]) -> None:
+    """Write a header and rows to a CSV file (LF line endings); parent folders are created."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -239,6 +314,7 @@ def write_csv(path: Path, columns: Sequence[str], rows: Sequence[Sequence[object
 
 
 def event_boxes(results_dir: Path, sample: pd.DataFrame) -> pd.DataFrame:
+    """Add the tracker box of each sampled trigger event (box_x0..box_y1; empty if none)."""
     events = pd.concat(
         [triggers(read_events(results_dir, s)).assign(split=s) for s in SPLITS], ignore_index=True
     )
@@ -253,6 +329,21 @@ def build_sample(
     clips_dir: Path,
     sample_out: Path,
 ) -> pd.DataFrame:
+    """Draw the sample and write its CSV, the labelling template and one strip per sample.
+
+    Args:
+        results_dir: Folder with the events CSVs.
+        output_root: Folder holding the saved SAM 2 masks.
+        load_video: Function (split, name) -> VideoSample.
+        clips_dir: Output folder for strips and labels_template.csv; must be outside the repo.
+        sample_out: Path of the sample CSV.
+
+    Returns:
+        The sample table.
+
+    Raises:
+        SystemExit: If clips_dir is inside the repository.
+    """
     check_outside_repo(clips_dir)
     sample = draw_sample(build_candidates(results_dir, output_root, load_video))
     write_csv(sample_out, SAMPLE_COLUMNS, list(sample.itertuples(index=False, name=None)))
@@ -269,6 +360,17 @@ def build_sample(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: draw the failure-type sample and render its clips.
+
+    Reads the events CSVs in --results-dir (default results), the saved SAM 2 masks and the
+    dataset (data root from the environment). Writes --sample-out (default
+    results/e10_types_sample.csv), and strips plus labels_template.csv in --clips-dir (required,
+    outside the repo). Exits through the argument parser if the data-root environment variable is
+    not set, and with a message if --clips-dir is inside the repo; otherwise 0.
+
+    Args:
+        argv: Command line arguments; defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--clips-dir", type=Path, required=True)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
