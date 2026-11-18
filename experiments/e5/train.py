@@ -96,6 +96,16 @@ def split_videos(names: Sequence[str]) -> tuple[list[str], list[str]]:
 def subset(
     table: pd.DataFrame, labels: pd.DataFrame, videos: Sequence[str]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Restrict the joined table and the labels to a set of videos.
+
+    Args:
+        table: Joined per-frame signals and boxes.
+        labels: Failure labels of the annotated frames.
+        videos: Video names to keep.
+
+    Returns:
+        The filtered (table, labels), both with a fresh index.
+    """
     keep = set(videos)
     return (
         table[table["video"].isin(keep)].reset_index(drop=True),
@@ -138,6 +148,15 @@ def fit(features: FloatArray, failure: npt.NDArray[np.bool_], sam2_model: str) -
 
 
 def window_max(probability: FloatArray, windows: Windows) -> FloatArray:
+    """Highest failure probability inside each annotation window.
+
+    Args:
+        probability: Per-row failure probability of the joined table.
+        windows: Window ids per row and the truth per window.
+
+    Returns:
+        One value per window; -1.0 for a window that contains no row.
+    """
     best = np.full(len(windows.truth), -1.0)
     inside = windows.frame_window >= 0
     np.maximum.at(best, windows.frame_window[inside], probability[inside])
@@ -145,6 +164,16 @@ def window_max(probability: FloatArray, windows: Windows) -> FloatArray:
 
 
 def window_counts(hit: npt.NDArray[np.bool_], truth: npt.NDArray[np.bool_]) -> dict[str, object]:
+    """Count flagged windows and compute precision, recall and F1.
+
+    Args:
+        hit: Per window, True if the detector flagged it.
+        truth: Per window, True if the failure label is set.
+
+    Returns:
+        Dictionary with windows, positives, flagged, tp, precision, recall and f1. A ratio whose
+        denominator is zero is 0.0.
+    """
     flagged, tp, positives = int(hit.sum()), int((hit & truth).sum()), int(truth.sum())
     denominator = flagged + positives
     return {
@@ -174,6 +203,15 @@ def choose_threshold(
 
 
 def pr_auc(best: FloatArray, truth: npt.NDArray[np.bool_]) -> float:
+    """Average precision of the window scores against the window truth.
+
+    Args:
+        best: Per-window maximum failure probability.
+        truth: Per-window failure truth.
+
+    Returns:
+        The PR-AUC, or NaN if no window is positive.
+    """
     return float(average_precision_score(truth, best)) if truth.any() else float("nan")
 
 
@@ -183,22 +221,42 @@ def train_model(
     labels: pd.DataFrame,
     rules_path: Path,
 ) -> tuple[LearnedModel, list[dict[str, object]]]:
+    """Fit the learned detector for one model and score it on the held-out videos.
+
+    Args:
+        model: SAM 2 model name.
+        table: Joined per-frame signals and boxes of SA-V val.
+        labels: Failure labels of the annotated frames.
+        rules_path: Frozen rules config, used to score the rules on the same held-out videos.
+
+    Returns:
+        The final model (with its frozen threshold) and three result rows: logreg at the
+        uncapped protocol threshold (not frozen), logreg at the capped frozen threshold, and the
+        frozen rules.
+    """
+    # Split by video so no video is in both the training and the held-out part.
     train, held = split_videos(sorted(set(table["video"])))
     t_table, t_labels = subset(table, labels, train)
     h_table, h_labels = subset(table, labels, held)
+    # Fit on the annotated frames of the training videos only.
     features, failure = training_rows(t_table, t_labels)
     fitted = fit(features, failure, model)
+    # Choose thresholds on the training windows: one without a cap, one capped.
     t_windows = build_windows(t_table, t_labels)
     train_best = window_max(fitted.table_probabilities(t_table), t_windows)
     uncapped = choose_threshold(train_best, t_windows.truth)
     threshold = choose_threshold(train_best, t_windows.truth, FROZEN_MAX_FLAG_RATE)
+    # The saved model keeps only the capped (frozen) threshold.
     final = LearnedModel(
         fitted.sam2_model, fitted.mean, fitted.std, fitted.coef, fitted.intercept, threshold
     )
+    # Score the held-out videos with the final model.
     h_windows = build_windows(h_table, h_labels)
     best = window_max(final.table_probabilities(h_table), h_windows)
+    # Frozen rules on the same held-out windows, for comparison.
     rules = load_rules_config(model, rules_path)
     rule_hit = window_any(batch_flags(h_table, rules)["flag"].to_numpy(dtype=bool), h_windows)
+    # Result rows: logreg at both thresholds, then the rules (no PR-AUC or threshold).
     common = {"model": model, "train_videos": len(train), "heldout_videos": len(held)}
     auc = pr_auc(best, h_windows.truth)
     rows = [
@@ -217,6 +275,12 @@ def train_model(
 
 
 def _write(path: Path, frame: pd.DataFrame) -> None:
+    """Write a data frame to a CSV, replacing the target file atomically.
+
+    Args:
+        path: Output CSV path; its folder is created if needed.
+        frame: Table to write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     frame.to_csv(temp, index=False)
@@ -233,22 +297,26 @@ def run(
     overwrite: bool = False,
 ) -> dict[str, str]:
     """Fit each model; returns {model: sha256}. Nothing is written unless every model is fitted."""
+    # Refuse before fitting anything: the frozen rules are needed for comparison.
     if not rules_path.is_file():
         raise TuneInputError(f"detector not frozen yet: {rules_path} does not exist")
     for model in models:
         if model_path(model, learned_dir).exists() and not overwrite:
             raise TuneInputError(f"{model_path(model, learned_dir)} exists; use --overwrite")
+    # Fit every model first; files are written only after all fits succeed.
     fitted: dict[str, LearnedModel] = {}
     rows: list[dict[str, object]] = []
     for model in models:
         table, labels = load_model_inputs(data_dir, model, expect_videos)
         fitted[model], model_rows = train_model(model, table, labels, rules_path)
         rows += model_rows
+    # Standardised weights per feature, with the mean and std used to scale them.
     weights = [
         {"model": m, "feature": name, "weight": w, "mean": mu, "std": sd}
         for m, fm in fitted.items()
         for name, w, mu, sd in zip(FEATURE_NAMES, fm.coef, fm.mean, fm.std, strict=True)
     ]
+    # Save the models (their hashes are to be recorded), then the two CSV files.
     hashes = {m: save_model(model_path(m, learned_dir), fm) for m, fm in fitted.items()}
     _write(results_dir / "e5_detector.csv", pd.DataFrame(rows, columns=list(DETECTOR_COLUMNS)))
     _write(results_dir / "e5_weights.csv", pd.DataFrame(weights, columns=list(WEIGHT_COLUMNS)))
@@ -256,6 +324,20 @@ def run(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point that trains the E5 learned detector.
+
+    Reads the SA-V val export (--data-dir, or the tune_rules folder under the data-root
+    environment variable) and the frozen rules config. Writes the model JSON and its sha256
+    file into --learned-dir and e5_detector.csv and e5_weights.csv into --results-dir. Prints
+    each model's hash.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if the input is refused (for example the model file exists and
+        --overwrite is not given). A missing data folder makes argparse exit with code 2.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--models", nargs="+", choices=("tiny", "large"), default=["tiny"])
     parser.add_argument("--data-dir", type=Path, default=None)

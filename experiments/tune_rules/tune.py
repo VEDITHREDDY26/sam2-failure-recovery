@@ -78,6 +78,18 @@ class Windows:
 
 @dataclasses.dataclass(frozen=True)
 class Choice:
+    """One chosen set of thresholds with its window counts on SA-V val.
+
+    Attributes:
+        thresholds: The rule thresholds of this choice.
+        windows: Number of annotation windows.
+        positives: Windows whose failure label is set.
+        flagged: Windows in which at least one rule fires.
+        tp: Flagged windows that are also positive.
+        per_rule_fires: Per rule, number of windows in which that rule alone fires.
+        per_rule_tp: Per rule, number of those windows that are positive.
+    """
+
     thresholds: RuleThresholds
     windows: int
     positives: int
@@ -88,36 +100,68 @@ class Choice:
 
     @property
     def fp(self) -> int:
+        """Flagged windows that are not positive."""
         return self.flagged - self.tp
 
     @property
     def fn(self) -> int:
+        """Positive windows that were not flagged."""
         return self.positives - self.tp
 
     @property
     def precision(self) -> float:
+        """Share of flagged windows that are positive; 0.0 if nothing is flagged."""
         return self.tp / self.flagged if self.flagged else 0.0
 
     @property
     def recall(self) -> float:
+        """Share of positive windows that are flagged; 0.0 if there are no positives."""
         return self.tp / self.positives if self.positives else 0.0
 
     @property
     def f1(self) -> float:
+        """F1 of the window-level flags (0.0 when there is nothing to score)."""
         return _f1(self.tp, self.flagged, self.positives)
 
 
 def _f1_array(tp: IntArray, flagged: IntArray, positives: int) -> npt.NDArray[np.float64]:
+    """F1 for an array of grid points, with 0.0 where the denominator is zero.
+
+    Args:
+        tp: True-positive window counts per grid point.
+        flagged: Flagged window counts per grid point.
+        positives: Number of positive windows (the same for every grid point).
+
+    Returns:
+        F1 per grid point, computed as 2 * tp / (flagged + positives).
+    """
     denominator = flagged + positives
     return np.where(denominator > 0, 2 * tp / np.maximum(denominator, 1), 0.0)
 
 
 def _f1(tp: int, flagged: int, positives: int) -> float:
+    """F1 from window counts: 2 * tp / (flagged + positives), or 0.0 if that is zero.
+
+    Args:
+        tp: True-positive windows.
+        flagged: Flagged windows.
+        positives: Positive windows.
+    """
     denominator = flagged + positives
     return 2 * tp / denominator if denominator else 0.0
 
 
 def check_paths(paths: Sequence[Path], require_split: bool = True) -> None:
+    """Refuse paths that point at data other than SA-V val.
+
+    Args:
+        paths: Paths about to be read.
+        require_split: If True, every path must also contain the SA-V val split name.
+
+    Raises:
+        TuneInputError: If a path contains "davis" or "sav_test", or lacks the split name when
+            it is required.
+    """
     for path in paths:
         text = str(path).lower()
         bad = [word for word in FORBIDDEN if word in text]
@@ -128,6 +172,15 @@ def check_paths(paths: Sequence[Path], require_split: bool = True) -> None:
 
 
 def input_paths(data_dir: Path, model: str) -> tuple[Path, Path, Path]:
+    """Locations of the SA-V val export of one model.
+
+    Args:
+        data_dir: Folder holding the export (the tune_rules folder under the data root).
+        model: SAM 2 model name.
+
+    Returns:
+        (labels CSV, boxes CSV, folder with the per-video signal CSVs).
+    """
     labels = data_dir / f"labels_{model}_{SPLIT}.csv"
     boxes = data_dir / f"boxes_{model}_{SPLIT}.csv"
     signals = data_dir / "signals" / f"sam2_{model}" / SPLIT / "signals"
@@ -136,11 +189,13 @@ def input_paths(data_dir: Path, model: str) -> tuple[Path, Path, Path]:
 
 def build_windows(table: pd.DataFrame, labels: pd.DataFrame) -> Windows:
     """Window per frame of the joined table; the prompt frame is the object's first table row."""
+    # The prompt frame of an object is its first row in the joined table.
     first = table.groupby(["video", "object_id"], as_index=False)["frame_index"].min()
     prompt = {
         (str(v), int(o)): int(f)
         for v, o, f in zip(first["video"], first["object_id"], first["frame_index"], strict=False)
     }
+    # Annotated frames of each object, in order, after its prompt frame.
     ann = labels.sort_values(["video", "object_id", "frame_index"], kind="stable")
     keys = list(zip(ann["video"].astype(str), ann["object_id"].astype(int), strict=False))
     if any(k not in prompt for k in keys):
@@ -148,6 +203,7 @@ def build_windows(table: pd.DataFrame, labels: pd.DataFrame) -> Windows:
     ann = ann[
         [f > prompt[k] for k, f in zip(keys, ann["frame_index"].astype(int), strict=False)]
     ].reset_index(drop=True)
+    # Remember where each object's annotated frames start and how many there are.
     ann_keys = list(zip(ann["video"].astype(str), ann["object_id"].astype(int), strict=False))
     ann_frames_all = ann["frame_index"].to_numpy(dtype=np.int64)
     offset: dict[tuple[str, int], int] = {}
@@ -155,12 +211,16 @@ def build_windows(table: pd.DataFrame, labels: pd.DataFrame) -> Windows:
     for i, k in enumerate(ann_keys):
         offset.setdefault(k, i)
         count[k] = count.get(k, 0) + 1
+    # Window id per table row; -1 means the row is in no window.
     frame_window = np.full(len(table), -1, dtype=np.int64)
     frame_index = table["frame_index"].to_numpy(dtype=np.int64)
     table_keys = list(zip(table["video"].astype(str), table["object_id"].astype(int), strict=False))
     if table.empty:
         raise TuneInputError("no frames in the joined table")
+    # Table rows are grouped by (video, object); find where each group starts.
     starts = [0] + [i for i in range(1, len(table_keys)) if table_keys[i] != table_keys[i - 1]]
+    # A row belongs to the first annotated frame at or after it, so a window is
+    # (previous annotated frame, this annotated frame].
     for begin, end in zip(starts, starts[1:] + [len(table_keys)], strict=False):
         key = table_keys[begin]
         if key not in offset:
@@ -175,6 +235,15 @@ def build_windows(table: pd.DataFrame, labels: pd.DataFrame) -> Windows:
 
 
 def window_any(frame_flags: BoolArray, windows: Windows) -> BoolArray:
+    """Tell which windows contain at least one flagged frame.
+
+    Args:
+        frame_flags: Per-row flags of the joined table.
+        windows: Window ids per row and the truth per window.
+
+    Returns:
+        One bool per window.
+    """
     inside = windows.frame_window[frame_flags & (windows.frame_window >= 0)]
     return np.bincount(inside, minlength=len(windows.truth)) > 0
 
@@ -183,11 +252,13 @@ def rule_vectors(
     table: pd.DataFrame, windows: Windows
 ) -> tuple[list[BoolArray], list[BoolArray], list[BoolArray], list[BoolArray]]:
     """Window-level bool vectors per grid value (disappearance: fraction x margin)."""
+    # Per-frame evidence of each rule; the grids below sweep its threshold.
     ev = batch_evidence(table)
     score, ratio, jump = (ev[c].to_numpy(dtype=float) for c in ("score", "area_ratio", "jump"))
     frac, margin = ev["prev_area_fraction"].to_numpy(dtype=float), ev["prev_margin"].to_numpy(
         dtype=float
     )
+    # Missing evidence compares as False; reduce each grid value to windows once.
     with np.errstate(invalid="ignore"):
         low = [window_any(score < v, windows) for v in SCORE_GRID]
         area = [window_any(ratio > v, windows) for v in AREA_RATIO_GRID]
@@ -213,6 +284,7 @@ def search(
     With max_flag_rate, only points flagging at most that share of all windows are eligible.
     """
     positives = int(truth.sum())
+    # Cap on flagged windows, if any: at most max_flag_rate of all windows.
     budget = None if max_flag_rate is None else int(np.floor(max_flag_rate * len(truth) + 1e-9))
     grid_shape = (
         len(low),
@@ -221,12 +293,14 @@ def search(
         len(MIN_AREA_FRACTION_GRID),
         len(BORDER_MARGIN_GRID),
     )
+    # Combine centre jump and disappearance for every pair of grid values up front.
     gone_stack = np.stack(gone)
     move_gone = np.stack([m | gone_stack for m in move])  # (move, gone, W)
     best: tuple[float, int, int] | None = None
     best_point: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
     best_counts = (0, 0)
     n_borders = len(BORDER_MARGIN_GRID)
+    # Loop over score and area grids; the other three are vectorised.
     for i_low, v_low in enumerate(low):
         for i_area, v_area in enumerate(area):
             base = v_low | v_area
@@ -239,6 +313,7 @@ def search(
             top = float(f1.max())
             if top < 0:
                 continue
+            # Among the best F1 in this slice, keep the one flagging fewest windows, then earliest.
             cand = np.argwhere(f1 == top)
             if best is not None and top < best[0]:
                 continue
@@ -251,12 +326,19 @@ def search(
                     best = (top, key_flagged, rank)
                     best_point = point
                     best_counts = (key_flagged, int(tp[i_move, i_gone]))
+    # No grid point met the flag cap.
     if best is None:
         raise TuneInputError(f"no grid point flags at most {max_flag_rate} of the windows")
     return best_point, best_counts[0], best_counts[1]
 
 
 def thresholds_at(point: tuple[int, int, int, int, int]) -> RuleThresholds:
+    """Turn grid indices into rule thresholds.
+
+    Args:
+        point: Indices into the score, area-ratio, jump, minimum-area-fraction and border
+            grids.
+    """
     i_s, i_a, i_j, i_f, i_b = point
     return RuleThresholds(
         SCORE_GRID[i_s],
@@ -270,6 +352,16 @@ def thresholds_at(point: tuple[int, int, int, int, int]) -> RuleThresholds:
 def rule_window_flags(
     table: pd.DataFrame, windows: Windows, cfg: RuleThresholds
 ) -> dict[str, BoolArray]:
+    """Window-level flags of each rule alone at the given thresholds.
+
+    Args:
+        table: Joined per-frame signals and boxes.
+        windows: Window ids per row and the truth per window.
+        cfg: Thresholds to apply.
+
+    Returns:
+        Rule name to a bool per window (True if that rule fires in the window).
+    """
     ev = batch_evidence(table)
     with np.errstate(invalid="ignore"):
         frame = {
@@ -289,6 +381,15 @@ def _choice_at(
     flagged: int,
     tp: int,
 ) -> Choice:
+    """Build a Choice for a grid point, with per-rule counts.
+
+    Args:
+        table: Joined per-frame signals and boxes.
+        windows: Window ids per row and the truth per window.
+        point: Grid indices of the chosen thresholds.
+        flagged: Flagged windows of this point, from the search.
+        tp: True-positive windows of this point, from the search.
+    """
     cfg = thresholds_at(point)
     per_rule = rule_window_flags(table, windows, cfg)
     return Choice(
@@ -314,6 +415,21 @@ def tune_model(table: pd.DataFrame, labels: pd.DataFrame) -> tuple[Choice, Choic
 def load_model_inputs(
     data_dir: Path, model: str, expect_videos: int
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load and check the SA-V val export of one model.
+
+    Args:
+        data_dir: Folder holding the export.
+        model: SAM 2 model name.
+        expect_videos: Number of videos the export must contain.
+
+    Returns:
+        The joined per-frame signals and boxes, and the failure labels.
+
+    Raises:
+        TuneInputError: If a path names another split, a file or folder is missing, the video
+            sets of labels, boxes and signals differ, or the video count is not expect_videos.
+    """
+    # Only SA-V val may be read: refuse any path that names another split.
     labels_path, boxes_path, signals_dir = input_paths(data_dir, model)
     check_paths([data_dir], require_split=False)
     check_paths([labels_path, boxes_path, signals_dir])
@@ -325,6 +441,7 @@ def load_model_inputs(
     labels = pd.read_csv(labels_path, dtype={"video": str})
     boxes = pd.read_csv(boxes_path, dtype={"video": str})
     files = {p.stem: p for p in sorted(signals_dir.glob("*.csv"))}
+    # The three inputs must cover exactly the same videos.
     sets = {
         "labels": set(labels["video"]),
         "boxes": set(boxes["video"]),
@@ -337,6 +454,7 @@ def load_model_inputs(
         )
     if len(files) != expect_videos:
         raise TuneInputError(f"{model}: {len(files)} videos, expected {expect_videos}")
+    # Overlapped objects (area > 0 but no box) are kept; their box is unknown.
     signals = pd.concat([read_signals(p) for p in files.values()], ignore_index=True)
     return join_signals_boxes(signals, boxes, allow_overlapped=True), labels
 
@@ -349,6 +467,19 @@ def results_row(
     selection: str = SELECTION_CAPPED,
     frozen: bool = True,
 ) -> dict[str, object]:
+    """Build one row of the results CSV for a chosen threshold set.
+
+    Args:
+        model: SAM 2 model name.
+        choice: The chosen thresholds with their window counts.
+        videos: Number of SA-V val videos used.
+        overlapped_rows: Rows with area > 0 but no box.
+        selection: Name of the selection protocol.
+        frozen: True if these thresholds go into the frozen detector config.
+
+    Returns:
+        Dictionary with thresholds, window counts, precision, recall, F1 and per-rule counts.
+    """
     cfg = choice.thresholds
     row: dict[str, object] = {
         "model": model,
@@ -375,6 +506,12 @@ def results_row(
 
 
 def _atomic(path: Path, text: str) -> None:
+    """Write text to a file, replacing the target atomically.
+
+    Args:
+        path: Output path; its folder is created if needed.
+        text: Content to write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text)
@@ -382,6 +519,11 @@ def _atomic(path: Path, text: str) -> None:
 
 
 def config_text(choices: dict[str, Choice]) -> str:
+    """YAML text of the frozen rules config.
+
+    Args:
+        choices: Chosen (capped) thresholds per model.
+    """
     body = {"kind": "rules"}
     for model in MODELS:
         body[model] = dataclasses.asdict(choices[model].thresholds)  # type: ignore[assignment]
@@ -395,14 +537,33 @@ def run(
     results_out: Path,
     expect_videos: int = EXPECTED_VIDEOS,
 ) -> list[dict[str, object]]:
+    """Tune both models on SA-V val and write the frozen config and the results CSV.
+
+    Args:
+        models: Models to tune; must be exactly the supported models, since the config needs both.
+        data_dir: Folder holding the SA-V val export.
+        config_out: Path of the rules YAML (only the capped thresholds are written).
+        results_out: Path of the results CSV (protocol and capped rows per model).
+        expect_videos: Number of videos each model's export must contain.
+
+    Returns:
+        The rows written to the results CSV.
+
+    Raises:
+        TuneInputError: If the models are not both given or an input check fails; nothing is
+            written in that case.
+    """
     if set(models) != set(MODELS) or len(models) != len(MODELS):
         raise TuneInputError(f"both models are needed to write the config: {list(MODELS)}")
+    # Load and check all inputs first, so nothing is written if any check fails.
     inputs = {m: load_model_inputs(data_dir, m, expect_videos) for m in models}
+    # Two choices per model: protocol (no cap) and capped.
     both = {m: tune_model(*inputs[m]) for m in models}
     choices = {m: both[m][1] for m in models}
     overlapped = {m: count_overlapped(inputs[m][0]) for m in models}
     for m in models:
         sys.stdout.write(f"{m}: overlapped rows (area > 0, no box) = {overlapped[m]}\n")
+    # One results row per model and selection; only the capped one is frozen.
     rows = [
         results_row(m, choice, int(inputs[m][1]["video"].nunique()), overlapped[m], sel, frozen)
         for m in models
@@ -411,12 +572,26 @@ def run(
             (both[m][1], SELECTION_CAPPED, True),
         )
     ]
+    # Write the frozen config and the results only after everything succeeded.
     _atomic(config_out, config_text(choices))
     _atomic(results_out, pd.DataFrame(rows).to_csv(index=False))
     return rows
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point for tuning the rule thresholds on SA-V val.
+
+    Reads the SA-V val export (--data-dir, or the tune_rules folder under the data-root
+    environment variable). Writes the rules YAML (--config-out) and the results CSV
+    (--results-out) and prints the counts of each choice.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if an input is refused. A missing data folder makes argparse exit with
+        code 2.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--data-dir", type=Path, default=None)

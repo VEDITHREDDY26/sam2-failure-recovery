@@ -66,11 +66,21 @@ class DetectorEvalError(ValueError):
 
 
 def detector_path(results_dir: Path, split: str) -> Path:
+    """Path of the E3 detector result CSV for one split inside the results folder.
+
+    Args:
+        results_dir: Folder that holds the result CSV files.
+        split: Test-set name, for example "davis_val" or "sav_test".
+
+    Returns:
+        results_dir / "e3_detector_<split>.csv".
+    """
     return results_dir / f"e3_detector_{split}.csv"
 
 
 def video_boxes(video: VideoSample, output_root: Path, method: str, split: str) -> pd.DataFrame:
     """Tight predicted box per (object, frame) from the object's prompt frame on."""
+    # First find the prompt frame of every object that is ever visible.
     starts: dict[int, int] = {}
     for obj_id in video.object_ids:
         try:
@@ -78,6 +88,7 @@ def video_boxes(video: VideoSample, output_root: Path, method: str, split: str) 
         except NeverVisibleError:
             continue
     rows: list[tuple[object, ...]] = []
+    # Read each stored label map once and cut one tight box per object per frame.
     if starts:
         for frame_index in range(min(starts.values()), video.num_frames):
             stem = video.frame_stems[frame_index]
@@ -86,9 +97,11 @@ def video_boxes(video: VideoSample, output_root: Path, method: str, split: str) 
             for obj_id, start in starts.items():
                 if frame_index < start:
                     continue
+                # An empty mask gives no box; the four corner cells stay empty.
                 box = box_from_mask(label == obj_id)
                 corners = (box.x0, box.y0, box.x1, box.y1) if box else (None,) * 4
                 rows.append((video.name, obj_id, frame_index, height, width, *corners))
+    # Corner columns use a nullable integer type so empty boxes stay empty.
     frame = pd.DataFrame(rows, columns=list(BOX_COLUMNS))
     return frame.astype({c: "Int64" for c in BOX_COLUMNS[3:]})
 
@@ -97,11 +110,14 @@ def evaluate_table(
     table: pd.DataFrame, labels: pd.DataFrame, thresholds: RuleThresholds
 ) -> list[dict[str, object]]:
     """One row per removed rule: window counts, precision and recall (no model / split yet)."""
+    # Windows and their truth are the same as in the threshold tuning.
     windows = build_windows(table, labels)
     positives = int(windows.truth.sum())
     rows: list[dict[str, object]] = []
+    # One pass per rule left out; "none" keeps all four rules on.
     for removed in REMOVED:
         enabled = [r for r in ALL_RULES if r != removed]
+        # Frame-level flags with the frozen thresholds, reduced to windows below.
         flags = batch_flags(table, thresholds, enabled)["flag"].to_numpy(dtype=bool)
         hit = window_any(flags, windows)
         flagged, tp = int(hit.sum()), int((hit & windows.truth).sum())
@@ -121,6 +137,7 @@ def evaluate_table(
 
 def split_inputs(model: str, split: str, subset_file: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Joined per-frame table and failure labels of the SAM 2 alone run on one split."""
+    # Refuse to evaluate a SAM 2 alone run that is not complete.
     cfg = load_data_config()
     method = validate_method(f"sam2_{model}")
     check = check_run(cfg, method, split, subset_file)
@@ -128,6 +145,7 @@ def split_inputs(model: str, split: str, subset_file: Path) -> tuple[pd.DataFram
         raise DetectorEvalError("\n".join(check.lines()) + f"\n{method}/{split}: run incomplete")
     output_root = cfg.data_root / cfg.output_root
     tables, labels, boxes = [], [], []
+    # Gather boxes, failure labels and signals for every video.
     for name in split_videos(cfg, split, subset_file):
         video = load_video(cfg, split, name)
         boxes.append(video_boxes(video, output_root, method, split))
@@ -148,6 +166,14 @@ def split_inputs(model: str, split: str, subset_file: Path) -> tuple[pd.DataFram
 
 
 def check_splits(splits: Sequence[str]) -> None:
+    """Refuse any split that is not a test set.
+
+    Args:
+        splits: Split names requested on the command line.
+
+    Raises:
+        DetectorEvalError: If a split is not in TEST_SPLITS (SA-V val is the tuning data).
+    """
     for split in splits:
         if split not in TEST_SPLITS:
             raise DetectorEvalError(
@@ -157,6 +183,14 @@ def check_splits(splits: Sequence[str]) -> None:
 
 
 def write_rows(path: Path, model: str, split: str, rows: Sequence[dict[str, object]]) -> None:
+    """Write the E3 detector rows of one split to a CSV, replacing the file atomically.
+
+    Args:
+        path: Output CSV path; its folder is created if needed.
+        model: SAM 2 model name ("tiny" or "large"), stored in the "model" column.
+        split: Test-set name, stored in the "split" column.
+        rows: One dictionary per removed rule, as returned by evaluate_table.
+    """
     frame = pd.DataFrame([{"model": model, "split": split, **r} for r in rows])
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
@@ -171,11 +205,30 @@ def run(
     subset_file: Path,
     rules_path: Path = DEFAULT_RULES_PATH,
 ) -> list[Path]:
+    """Evaluate the frozen rule detector with each rule removed in turn, one CSV per split.
+
+    Args:
+        model: SAM 2 model name whose frozen thresholds are used.
+        splits: Test sets to evaluate (checked by check_splits).
+        results_dir: Folder that receives e3_detector_<split>.csv.
+        subset_file: File listing the videos of the SA-V test subset.
+        rules_path: Frozen rules config with the thresholds.
+
+    Returns:
+        The paths of the CSV files written.
+
+    Raises:
+        DetectorEvalError: If a split is not allowed, the rules config does not exist, or a
+            SAM 2 alone run is incomplete.
+    """
+    # Refuse early: only test sets, and only once the detector is frozen.
     check_splits(splits)
     if not rules_path.is_file():
         raise DetectorEvalError(f"detector not frozen yet: {rules_path} does not exist")
+    # Thresholds are read, never fitted, here.
     thresholds = load_rules_config(model, rules_path)
     written = []
+    # Build the per-frame table and labels, count windows, write the rows.
     for split in splits:
         table, labels = split_inputs(model, split, subset_file)
         path = detector_path(results_dir, split)
@@ -185,6 +238,19 @@ def run(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point for the E3 detector-side evaluation.
+
+    Reads the SAM 2 alone masks and signals under the data root (environment variable named by
+    DATA_ROOT_ENV) and the frozen rules config. Writes results/e3_detector_<split>.csv for each
+    split and prints the paths.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if an input is missing, incomplete or not allowed. If the data-root
+        variable is not set, argparse exits with code 2.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--model", choices=MODELS, default="tiny")
     parser.add_argument("--splits", nargs="+", default=list(TEST_SPLITS))

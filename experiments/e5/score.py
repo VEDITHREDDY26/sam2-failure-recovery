@@ -25,6 +25,19 @@ from src.recovery.online_runner import check_online_method
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point that scores a finished learned-detector run.
+
+    Reads the run's masks under the data root and writes the score CSV files through
+    experiments.e2.score into --results-dir.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+
+    Returns:
+        0 if every split was scored, 1 if any split was refused. Exits with a message
+        (SystemExit) if the config is not a learned + CSRT one; argparse exits with code 2 if
+        the data-root variable is not set.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--splits", nargs="+", choices=E5_SPLITS, default=list(E5_SPLITS))
@@ -34,11 +47,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Only learned + CSRT runs are scored here.
     run_cfg = load_recovery_config(args.config)
     if run_cfg.detector != "learned" or run_cfg.box_source != "csrt":
         raise SystemExit(f"{args.config}: E5 scores learned + csrt runs only")
     method = check_online_method(run_cfg.method)
     model = model_of(run_cfg)
+    # Score each split; the E2 code refuses runs that are incomplete.
     refused = 0
     for split in args.splits:
         ok = score_split(method, model, split, args.results_dir, args.subset_file, args.videos)

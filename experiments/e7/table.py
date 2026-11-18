@@ -42,10 +42,26 @@ class E7Error(ValueError):
 
 
 def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dict[str, object]]:
+    """Build the E7 rows: SAM 2 alone and each of the four arms, per test set.
+
+    Args:
+        results_dir: Folder with the scored runs, their event files and the arms check file.
+        splits: Test sets to include.
+
+    Returns:
+        One row per (test set, arm) with J, F, J&F, the J&F delta versus SAM 2 alone, the
+        number of re-prompts and the oracle flag.
+
+    Raises:
+        E7Error: If the arms check file is missing, or an arm's oracle label does not match
+            its pieces.
+    """
+    # The arms must have been checked as comparable before the table is built.
     if not (results_dir / CHECK_FILE).is_file():
         raise E7Error(f"{results_dir / CHECK_FILE} missing: run experiments.e7.check_arms first")
     table: list[dict[str, object]] = []
     for split in splits:
+        # SAM 2 alone is the reference row; it uses no detector or box source.
         alone = load_scores(results_dir / f"{ALONE}_{split}.csv")
         base = means(alone)
         table.append(
@@ -62,6 +78,7 @@ def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dic
             }
             | base
         )
+        # Every arm that uses ground truth must be labelled oracle in name and flag.
         for arm in ARMS:
             if ("oracle" in arm.name) != arm.oracle or ("oracle" in arm.method) != arm.oracle:
                 raise E7Error(f"{arm.name}: oracle label does not match its pieces")
@@ -87,6 +104,12 @@ def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dic
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the E7 table as a CSV in the column order TABLE_COLUMNS, atomically.
+
+    Args:
+        path: Output CSV path; its folder is created if needed.
+        table: Rows from build_rows. Floats are written with repr so no precision is lost.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -100,6 +123,14 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point that builds results/e7.csv.
+
+    Reads the scored runs, their event files and the arms check file under --results-dir and
+    writes the table to --out. Raises E7Error if the check file is missing.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--out", default="results/e7.csv")

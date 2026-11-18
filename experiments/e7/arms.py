@@ -7,6 +7,15 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Arm:
+    """One E7 arm: which detector and which box source the run uses.
+
+    Attributes:
+        name: Short arm name used in tables.
+        method: Method name of the run; contains "oracle" when ground truth is used.
+        detector: "rules" or "oracle" (oracle flags).
+        box_source: "csrt" or "oracle" (oracle box).
+    """
+
     name: str
     method: str
     detector: str
@@ -14,6 +23,7 @@ class Arm:
 
     @property
     def oracle(self) -> bool:
+        """True if the arm reads ground truth, through its detector or its box source."""
         return "oracle" in (self.detector, self.box_source)
 
 

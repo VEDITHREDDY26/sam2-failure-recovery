@@ -33,16 +33,34 @@ class ArmsMismatch(ValueError):
 
 
 def file_hash(path: Path) -> str:
+    """SHA-256 of a file's bytes as a hex string.
+
+    Args:
+        path: File to hash.
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def scored_objects(path: Path) -> set[tuple[str, int]]:
+    """Set of (video, object) pairs in a score CSV.
+
+    Args:
+        path: Score CSV of one run and split.
+
+    Raises:
+        ArmsMismatch: If the file is missing.
+    """
     if not path.is_file():
         raise ArmsMismatch(f"missing score file: {path}")
     return {(r.video, r.object) for r in read_scores_csv(path)}
 
 
 def prompted_objects(path: Path) -> set[tuple[str, int]]:
+    """Set of (video, object) pairs that the prompts file gives a box.
+
+    Args:
+        path: Prompts JSON of one split.
+    """
     batch = load_batch_prompts(path)
     return {(video, obj) for video, p in batch.videos.items() for obj in p.boxes}
 
@@ -51,14 +69,17 @@ def check_arms(
     results_dir: Path, prompts: Mapping[str, Path], test_sets: Sequence[str] = TEST_SETS
 ) -> list[tuple[str, str, str, int, int]]:
     """Rows (test_set, arm, hash, videos, objects); raises ArmsMismatch on any difference."""
+    # SAM 2 alone and the four arms are all compared.
     names = [ALONE, *(a.name for a in ARMS)]
     methods = {ALONE: ALONE, **{a.name: a.method for a in ARMS}}
     rows: list[tuple[str, str, str, int, int]] = []
+    # Per split: same prompts file for everyone, then same videos and objects.
     for split in test_sets:
         hashes = {n: file_hash(prompts[f"{n}:{split}"]) for n in names}
         if len(set(hashes.values())) != 1:
             odd = sorted(hashes)
             raise ArmsMismatch(f"{split}: arms used different prompts files: {odd} {hashes}")
+        # The prompts file of SAM 2 alone defines the reference objects.
         reference = prompted_objects(prompts[f"{ALONE}:{split}"])
         for name in names:
             found = scored_objects(results_dir / f"{methods[name]}_{split}.csv")
@@ -71,6 +92,12 @@ def check_arms(
 
 
 def write_check(path: Path, rows: Sequence[tuple[str, str, str, int, int]]) -> None:
+    """Write the arms check rows to a CSV.
+
+    Args:
+        path: Output CSV path; its folder is created if needed.
+        rows: Rows from check_arms, in the order of CHECK_COLUMNS.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -79,6 +106,16 @@ def write_check(path: Path, rows: Sequence[tuple[str, str, str, int, int]]) -> N
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point that checks the four E7 arms are comparable.
+
+    Reads the score CSVs under --results-dir and one prompts file per split (from
+    --prompts-dir, or the prompts folder under the data root). Writes the check table to --out.
+    Raises ArmsMismatch if the arms differ; argparse exits with code 2 for bad arguments such as
+    an unknown --arm-prompts key or a missing data root.
+
+    Args:
+        argv: Argument list; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--prompts-dir", type=Path, default=None)
@@ -86,17 +123,20 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--splits", nargs="+", choices=TEST_SETS, default=list(TEST_SETS))
     parser.add_argument("--arm-prompts", nargs="*", default=[], metavar="ARM:SPLIT=PATH")
     args = parser.parse_args(argv)
+    # Prompts live under the data root unless a folder is given.
     prompts_dir = args.prompts_dir
     if prompts_dir is None:
         if not os.environ.get(DATA_ROOT_ENV):
             parser.error(f"{DATA_ROOT_ENV} is not set (or pass --prompts-dir)")
         cfg = load_data_config()
         prompts_dir = cfg.data_root / cfg.output_root / "prompts"
+    # One prompts file per arm and split; all point at the same file by default.
     prompts = {
         f"{n}:{s}": prompts_dir / f"{s}.json"
         for n in [ALONE, *(a.name for a in ARMS)]
         for s in args.splits
     }
+    # Optional override of one arm's prompts file, to show the check can fail.
     for item in args.arm_prompts:
         key, _, path = item.partition("=")
         if key not in prompts:
