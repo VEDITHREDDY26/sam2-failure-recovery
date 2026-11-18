@@ -107,7 +107,8 @@ def _check_frame(path: Path, size: tuple[int, int], max_id: int | None) -> str |
         A message if the file is not an indexed (mode P) image, has the wrong size, holds an
         id above max_id or cannot be read; None if it is fine.
     """
-    # Opening the file also catches truncated or corrupt PNGs.
+    # Opening the file catches unreadable headers; for DAVIS, reading the pixels for the id check
+    # also catches truncated data.
     try:
         with Image.open(path) as image:
             if image.mode != "P":

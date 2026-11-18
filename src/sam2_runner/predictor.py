@@ -88,8 +88,10 @@ class VideoPredictor(Protocol):
 
         Args:
             inference_state: State returned by init_state.
-            start_frame_idx: 0-based frame to start from; None lets SAM 2 choose.
-            max_frame_num_to_track: Maximum number of frames to track; None means to the end.
+            start_frame_idx: 0-based frame to start from; None starts from the earliest frame
+                that has a prompt.
+            max_frame_num_to_track: How many frames to track after start_frame_idx (so this many
+                plus one in total, counting the start frame); None means to the end of the video.
             reverse: Track backwards instead of forwards.
 
         Yields:
