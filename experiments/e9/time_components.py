@@ -185,6 +185,9 @@ class TimingBoxes:
     def observe(self, *args: Any, **kwargs: Any) -> None:
         self.clock.timed("csrt", self.inner.observe, *args, **kwargs)
 
+    def skip(self, *args: Any, **kwargs: Any) -> None:
+        self.clock.timed("csrt", self.inner.skip, *args, **kwargs)
+
     def propose(self, *args: Any, **kwargs: Any) -> Any:
         return self.clock.timed("csrt", self.inner.propose, *args, **kwargs)
 

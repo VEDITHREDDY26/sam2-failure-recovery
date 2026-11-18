@@ -134,3 +134,19 @@ def test_continuous_variant_scores_through_the_e2_scorer(
     args = ["--config", CONTINUOUS, "--subset-file", str(subset), "--results-dir", str(results)]
     assert score.main([*args, "--splits", SPLIT]) == 0
     assert (results / f"{method}_{SPLIT}.csv").is_file()
+
+
+def test_vit_gated_run_is_judged_like_any_other(world: tuple[Path, Path], tmp_path: Path) -> None:
+    out, subset = world
+    method = "fix_gated_rules_vit_anchored_tiny"
+    make_online_run(out, method=method)
+    write_events(out, method, SPLIT, "zebra", [(1, 3, "reprompted"), (1, 9, "gated")])
+    config = tmp_path / "run.yaml"
+    config.write_text(
+        f"kind: gated_recovery_run\nmethod: {method}\ndetector: rules\n"
+        "box_source: vit_anchored\n" + EXTRA + "gate_config: configs/recovery/box_gate_tiny.yaml\n"
+    )
+    results = tmp_path / "results"
+    assert run_helper(subset, results, "--splits", SPLIT, config=str(config)) == 0
+    got = pd.read_csv(results / f"{method}_{SPLIT}_reprompts.csv")
+    assert got["frame_index"].tolist() == [3] and got["wrong"].tolist() == [False]

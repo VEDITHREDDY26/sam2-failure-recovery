@@ -9,6 +9,7 @@ from src.recovery.config import (
     VerifiedRunConfig,
     load_recovery_config,
 )
+from src.recovery.gate import load_box_gate
 
 EXTRA = 'tracker_mode: ""\ndisabled_rules: []\n'
 
@@ -16,12 +17,21 @@ ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = sorted(
     p
     for p in (ROOT / "configs" / "recovery").glob("*.yaml")
-    if p.name not in ("box_check.yaml", "recovery.yaml") and not p.name.startswith("verified_")
+    if p.name not in ("box_check.yaml", "recovery.yaml", "vit.yaml")
+    and not p.name.startswith(("verified_", "box_gate_"))
 ) + sorted((ROOT / "configs" / "oracle").glob("*.yaml"))
+GATES = sorted((ROOT / "configs" / "recovery").glob("box_gate_*.yaml"))
 
 
 def test_shipped_configs_exist() -> None:
-    assert len(SHIPPED) == 12
+    assert len(SHIPPED) == 15
+    assert [p.name for p in GATES] == ["box_gate_large.yaml", "box_gate_tiny.yaml"]
+
+
+@pytest.mark.parametrize("path", GATES, ids=lambda p: p.name)
+def test_every_shipped_gate_loads(path: Path) -> None:
+    gate = load_box_gate(path).gate()
+    assert gate.s_min is not None or gate.a_max is not None
 
 
 @pytest.mark.parametrize("path", SHIPPED, ids=lambda p: p.name)

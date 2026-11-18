@@ -9,8 +9,9 @@ Per split, only if every expected video is complete (nothing is written otherwis
   results/<method>_<split>_frames.csv  per object: labelled frames, SAM 2 alone and fix failures,
                                        frames recovered (alone failed, fix did not) and broken
   results/events_<method>_<split>.csv  every recovery event of the run
-Output names starting with sam2_ or baseline are refused, so the SAM 2 alone results are never
-overwritten. Only davis_val and sav_test exist for E2.
+Any real-system run is scored (rules detector; CSRT, ViT or motion box source; gated or not); oracle
+runs are refused. Output names starting with sam2_ or baseline are refused, so the SAM 2 alone
+results are never overwritten. Only davis_val and sav_test exist for E2.
 """
 
 from __future__ import annotations
@@ -204,9 +205,10 @@ def score_split(
     frames.to_csv(results_dir / names["frames"], index=False)
     events.to_csv(results_dir / names["events"], index=False)
     reprompts = int((events["action"] == "reprompted").sum())
+    gated = int((events["action"] == "gated").sum())
     sys.stdout.write(
         f"{label}: {len(videos)} videos, {len(rows)} objects, "
-        f"J&F {fmean([r.jf for r in rows]):.4f}, {reprompts} re-prompts, "
+        f"J&F {fmean([r.jf for r in rows]):.4f}, {reprompts} re-prompts, {gated} gated, "
         f"{int(frames['frames_recovered'].sum())} frames recovered, "
         f"{int(frames['frames_broken'].sum())} broken -> {results_dir}\n"
     )
@@ -224,8 +226,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     run_cfg = load_recovery_config(args.config)
-    if run_cfg.detector != "rules" or run_cfg.box_source != "csrt":
-        raise SystemExit(f"{args.config}: E2 scores the real system only (rules + csrt)")
+    if run_cfg.detector != "rules" or run_cfg.box_source == "oracle":
+        raise SystemExit(
+            f"{args.config}: scoring is for the real system only (rules detector, no oracle box)"
+        )
     method = check_online_method(run_cfg.method)
     model = model_of(run_cfg)
     refused = 0

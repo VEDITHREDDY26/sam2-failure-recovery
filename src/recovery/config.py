@@ -14,7 +14,8 @@ from src.common.config import ConfigError, load_config, register
 from src.common.layout import is_oracle_method, validate_method
 
 DETECTORS = ("rules", "learned", "oracle")
-BOX_SOURCES = ("csrt", "oracle")
+VIT_SOURCES = ("vit_reinit", "vit_continuous", "vit_anchored")
+BOX_SOURCES = ("csrt", "oracle", "motion", *VIT_SOURCES)
 TRACKER_MODES = ("reinit", "continuous")
 RULE_NAMES = ("low_score", "area_change", "centre_jump", "disappearance")
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +48,8 @@ class RecoveryRunConfig:
             raise ConfigError(f"'{self.method}' says oracle but uses no oracle piece")
 
     def _check_variant(self) -> None:
+        if self.box_source != "csrt" and self.tracker_mode:
+            raise ConfigError(f"'{self.method}': tracker_mode applies to the csrt box source only")
         if self.tracker_mode and self.tracker_mode not in TRACKER_MODES:
             raise ConfigError(
                 f"tracker_mode must be empty (fixed settings file) or one of {TRACKER_MODES}"
@@ -56,8 +59,16 @@ class RecoveryRunConfig:
             raise ConfigError(f"disabled_rules must be distinct names from {RULE_NAMES}")
         if ("learned" in self.method) != (self.detector == "learned"):
             raise ConfigError(f"'{self.method}': 'learned' in the name iff detector is learned")
-        if ("continuous" in self.method) != (self.tracker_mode == "continuous"):
-            raise ConfigError(f"'{self.method}': 'continuous' in the name iff tracker_mode is")
+        continuous = self.tracker_mode == "continuous" or self.box_source == "vit_continuous"
+        if ("continuous" in self.method) != continuous:
+            raise ConfigError(f"'{self.method}': 'continuous' in the name iff the source is")
+        for source in ("vit_reinit", "vit_anchored", "motion"):
+            if (source in self.method) != (self.box_source == source):
+                raise ConfigError(f"'{self.method}': '{source}' in the name iff box_source is")
+        if ("vit" in self.method) != (self.box_source in VIT_SOURCES):
+            raise ConfigError(f"'{self.method}': 'vit' in the name iff box_source is a ViT one")
+        if ("gated" in self.method) != isinstance(self, GatedRunConfig):
+            raise ConfigError(f"'{self.method}': 'gated' in the name iff a gated config")
         if ("verified" in self.method) != isinstance(self, VerifiedRunConfig):
             raise ConfigError(f"'{self.method}': 'verified' in the name iff a verified config")
         for rule in RULE_NAMES:
@@ -85,6 +96,24 @@ class VerifiedRunConfig(RecoveryRunConfig):
 
     def verify_path(self) -> Path:
         return ROOT / self.verify_config
+
+
+@register("gated_recovery_run")
+@dataclasses.dataclass(frozen=True)
+class GatedRunConfig(RecoveryRunConfig):
+    """A real-system run whose proposed boxes pass the gate before the box check."""
+
+    gate_config: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.detector != "rules" or self.box_source == "oracle":
+            raise ConfigError(f"'{self.method}': a gated run uses the rule detector, no oracle")
+        if not self.gate_config:
+            raise ConfigError(f"'{self.method}': gate_config must name the gate file")
+
+    def gate_path(self) -> Path:
+        return ROOT / self.gate_config
 
 
 def load_recovery_config(path: Path) -> RecoveryRunConfig:

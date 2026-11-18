@@ -128,6 +128,7 @@ class ScriptedBoxes:
         self.results = results or {}
         self.proposed: list[tuple[int, int]] = []
         self.started: list[tuple[int, int]] = []
+        self.skipped: list[tuple[int, int]] = []
         self._last: dict[int, Box] = {}
 
     def reset(self) -> None:
@@ -139,6 +140,9 @@ class ScriptedBoxes:
 
     def observe(self, obj_id: int, frame_index: int, frame: Any, mask: Any) -> None:
         self._remember(obj_id, mask)
+
+    def skip(self, obj_id: int, frame_index: int, frame: Any) -> None:
+        self.skipped.append((obj_id, frame_index))
 
     def propose(self, obj_id: int, frame_index: int, frame: Any) -> TrackResult:
         self.proposed.append((obj_id, frame_index))

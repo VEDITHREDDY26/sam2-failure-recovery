@@ -1,0 +1,7 @@
+kind: gated_recovery_run
+method: fix_gated_rules_vit_continuous_large
+detector: rules
+box_source: vit_continuous
+tracker_mode: ""
+disabled_rules: []
+gate_config: configs/recovery/box_gate_large.yaml

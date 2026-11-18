@@ -1,0 +1,17 @@
+video,object_id,frame_index,gt_frame_index,iou_after,wrong
+bike-packing,1,15,15,0.7088274632189032,False
+bmx-trees,2,16,16,0.4722461892436008,True
+dogs-jump,1,8,8,0.20831429876656007,True
+dogs-jump,3,10,10,0.7719416386083052,False
+india,2,36,36,0.005608829383028768,True
+india,1,38,38,0.014645758940123169,True
+india,2,48,48,0.0,True
+lab-coat,2,1,1,0.125,True
+lab-coat,1,2,2,0.4,True
+lab-coat,3,36,36,0.4808728448275862,True
+motocross-jump,2,1,1,0.3983084977849376,True
+paragliding-launch,3,10,10,0.22672450275074058,True
+paragliding-launch,3,24,24,0.08053965658217498,True
+pigs,2,47,47,0.028157936133396257,True
+pigs,2,60,60,0.1363930187459599,True
+shooting,3,1,1,0.6159389868457879,False

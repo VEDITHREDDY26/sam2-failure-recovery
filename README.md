@@ -32,7 +32,7 @@ src/detection/   failure labels, rule detector, learned detector, streaming adap
 src/oracle/      ground-truth flags and boxes (oracle runs only, named "oracle")
 src/recovery/    aligned CSRT, box check, recovery module, online runner
 src/eval/        official-scorer wrappers, completeness checks, bootstrap, main table
-experiments/     one package per experiment (e1 ... e12) plus run / tuning helpers
+experiments/     one package per experiment (e1 ... e13) plus run / tuning helpers
 configs/         YAML / JSON settings; configs/detector/ and configs/verify/ are the frozen ones
 scripts/         checkpoint download, demo video
 notebooks/       Colab notebooks
@@ -443,6 +443,59 @@ python -m experiments.e12.types_outcome --labels results/e10_types_labels.csv
 python -m experiments.e12.figures
 ```
 
+### 15. E13 (extension): a stronger re-prompt box
+
+Pilot on SA-V val only (CPU job on cached SAM 2-alone outputs, sharded over videos, then merged;
+Tiny and Large), then the choice of box source and gate per model. DATA for the pilot, MAC for the
+choice (`results/e13_pilot.csv`, `results/e13_gate_grid.csv`, `results/e13_choice.csv`,
+`configs/recovery/box_gate_<model>.yaml` on a go). The ViT tracker model file
+(`object_tracking_vittrack_2023sep.onnx`, OpenCV model zoo) goes under
+`$SAM2FR_DATA_ROOT/models/vittrack/` (the config `configs/recovery/vit.yaml` pins its sha256).
+
+```
+python -m experiments.e13.pilot --model tiny --shard 0 --nshards 8   # shards 0..7, then:
+python -m experiments.e13.pilot --model tiny --merge                 # same for --model large
+python -m experiments.e13.choose
+```
+
+The run configs are written from the choice, never by hand (a model that is a no-go gets none):
+
+```
+python -m experiments.e13.make_configs
+```
+
+Test runs only after the choice is committed and tagged `box-frozen`. GPU: Tiny on DAVIS val and every
+SA-V test shard, (a) with the chosen box and no gate and (b) with the frozen gate; Large (b) only.
+`make_configs --list` names each run; when the chosen source is CSRT, variant (a) is the existing
+E2 (`rules_csrt_tiny.yaml`) or E8 (`rules_csrt_continuous_tiny.yaml`) run and is not run again. The
+example is for one gated Tiny run; repeat for the other shards and configs:
+
+```
+python -m experiments.e2.run_online --config $CFG/rules_gated_<arm>_tiny.yaml --prompts $PROMPTS/davis_val.json --videos $(cat $LISTS/davis_val_all.txt)
+python -m experiments.e2.run_online --config $CFG/rules_gated_<arm>_tiny.yaml --prompts $PROMPTS/sav_test.json --videos $(cat $LISTS/sav_test_0of4.txt)
+```
+
+DATA: scoring (as step 3), the wrong re-prompt file (as step 9; also run it for
+`rules_csrt_large.yaml`) and the identity check: every video where no re-prompt happened must equal
+SAM 2 alone on every frame, and every video must equal it before its first re-prompt
+(`results/e13_gated_check_<method>_<split>.csv`, exit status 1 on a difference):
+
+```
+python -m experiments.e2.score --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+python -m experiments.e8.wrong_reprompts --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+python -m experiments.e13.check_gated --config $CFG/rules_gated_<arm>_tiny.yaml --splits davis_val sav_test
+```
+
+MAC: `results/e13.csv` (and `results/e13.tex`) with SAM 2 alone, E2, variant (a), variant (b) and the
+E7 rules + oracle box row (marked oracle), with paired 95% bootstrap intervals against SAM 2 alone and
+against E2, improved / worse / unchanged videos, re-prompts, wrong re-prompts, gated events and FPS;
+and `figures/e13_ladder.png`:
+
+```
+python -m experiments.e13.table
+python -m experiments.e13.figure
+```
+
 ## Results
 
 Main table (`results/main_table.csv`, same rounding as `python -m src.eval.tables`): J&F in
@@ -465,12 +518,54 @@ below zero only for Large on the SA-V test subset. More videos get worse than ge
 every cell except Tiny on DAVIS val, where the counts are 5 better and 4 worse. The fix also
 runs at roughly half the speed of SAM 2 alone or less, because each re-prompt re-runs the
 frames before it (E9 times the components). The oracle study (E7) and the extension runs
-(E11, E12) look at this further; their tables are in `results/`.
+(E11, E12, E13) look at this further; their tables are in `results/`.
 
 The first-frame prompt is a box built from the ground-truth mask of the object's first annotated
 frame. The DAVIS and SA-V leaderboards prompt SAM 2 with that mask itself. Our numbers therefore
 are not comparable with leaderboard numbers. They are comparable with each other, because all
 three systems get the same boxes.
+
+### Extension E13: a stronger re-prompt box
+
+E7 shows that the CSRT re-prompt box is the main reason the fix loses J&F. E13 asks whether an
+independent tracker does better. A pilot on SA-V val only replayed six box sources and a gate at
+every detector flag (`results/e13_pilot.csv`, `results/e13_gate_grid.csv`). For both models it chose
+OpenCV's ViT tracker run continuously from the first prompt, re-prompting only when the tracker's
+score is at least 0.6 (`results/e13_choice.csv`). The choice was frozen (tag `box-frozen`) before
+any test run. Table: `results/e13.csv`, figure: `figures/e13_ladder.png`. Delta is the change in
+J&F in points against SAM 2 alone, with the paired 95% bootstrap interval over videos. Re-prompts
+are followed in brackets by the wrong ones (box IoU < 0.5 with the ground-truth box at the first
+annotated frame at or after the re-prompt, as in E8). SA-V is annotated on every fourth frame, so
+this rule also counts some correct boxes on fast objects as wrong; `results/e13.csv` gives the
+counts at annotated frames only as well (`reprompts_exact`, `wrong_exact`).
+
+| Model | Method | DAVIS delta | DAVIS better / worse / same | DAVIS re-prompts (wrong) | DAVIS FPS | SA-V delta | SA-V better / worse / same | SA-V re-prompts (wrong) | SA-V FPS |
+|---|---|---|---|---|---|---|---|---|---|
+| Tiny | SAM 2 alone | -- | -- | -- | 8.51 | -- | -- | -- | 11.71 |
+| Tiny | rules + CSRT (E2) | -1.1 [-3.1, +0.5] | 5 / 4 / 21 | 32 (15) | 4.62 | -3.9 [-8.6, +0.6] | 17 / 35 / 8 | 537 (321) | 1.15 |
+| Tiny | rules + ViT, no gate | -0.5 [-1.4, +0.2] | 4 / 5 / 21 | 16 (13) | 7.50 | -6.0 [-9.4, -2.7] | 10 / 29 / 21 | 129 (82) | 4.99 |
+| Tiny | rules + ViT + gate | +0.1 [+0.0, +0.3] | 3 / 0 / 27 | 3 (1) | 9.06 | +0.1 [-0.6, +0.9] | 4 / 6 / 50 | 17 (7) | 8.30 |
+| Tiny | rules + oracle box (E7, oracle) | +0.2 [-0.4, +0.6] | 7 / 3 / 20 | 29 | 6.36 | +3.5 [+0.7, +6.4] | 32 / 10 / 18 | 199 | 3.58 |
+| Large | SAM 2 alone | -- | -- | -- | 5.87 | -- | -- | -- | 6.22 |
+| Large | rules + CSRT (E2) | -0.5 [-1.6, +0.5] | 2 / 5 / 23 | 31 (18) | 2.97 | -7.2 [-11.5, -3.2] | 15 / 37 / 8 | 531 (297) | 0.83 |
+| Large | rules + ViT + gate | -0.8 [-2.5, +0.0] | 0 / 1 / 29 | 2 (1) | 5.38 | -0.6 [-1.5, +0.0] | 0 / 3 / 57 | 7 (2) | 5.03 |
+
+With the gate, the ViT box changes little. Tiny gains +0.1 on both test sets. On DAVIS val no video
+got worse and 3 got better: a small non-negative change, not a significant gain. Large loses 0.8 and
+0.6, with intervals that reach zero from below. The gate blocks almost every re-prompt (on SA-V test
+1291 for Tiny and 1522 for Large, all for a low tracker score), so the gated system stays close to
+SAM 2 alone and loses much less than E2. On SA-V test it is +4.0 [-0.3, +8.6] (Tiny) and
++6.6 [+2.4, +11.0] (Large) points better than E2 (`delta_vs_e2`). Without the gate the ViT box is no
+better than CSRT: Tiny on SA-V test is -6.0 against -3.9 for E2, a paired difference of -2.2
+[-7.1, +2.6], although it re-prompts about four times less often. The oracle box (E7, Tiny only)
+reaches +3.5 [+0.7, +6.4] on SA-V test, so a better box would still help, but the trackers tried here
+do not provide one: in the pilot, at real failures, no box source gave a box with IoU >= 0.5 against
+the ground truth more than 34% of the time (`real_good_box_share`, view `exact`). Every worse case is
+kept. Large's four worse videos are kite-surf (one object -47 points after one re-prompt),
+sav_040678 (-37 after one re-prompt), sav_025271 (one object -17 after three re-prompts) and
+sav_041173 (-4.5 after one re-prompt). The gated runs reach 8.3 (Tiny) and 5.0 (Large) FPS on
+SA-V test against 11.7 and 6.2 for SAM 2 alone, because the tracker runs on every frame. On DAVIS val
+the FPS differences to SAM 2 alone are within the run-to-run variation of separate jobs.
 
 ## Credits
 
@@ -482,8 +577,10 @@ three systems get the same boxes.
   script and the notebooks `notebooks/run_sam2.ipynb` and `notebooks/sam2_smoke.ipynb`.
 - Vedith Reddy Kommula wrote the rest: data loaders, CSRT + GrabCut baseline, oracles, aligned
   CSRT and box check, rule and learned detectors, recovery module and online runner, bootstrap
-  and tables, experiments E1 to E12, figures and demo video.
+  and tables, the ViT and motion box sources and the gate, experiments E1 to E13, figures and
+  demo video.
 - Third party, used unmodified: SAM 2.1 (Meta, github.com/facebookresearch/sam2, pinned commit in
   `requirements-colab.txt`), the DAVIS 2017 evaluator and the SA-V evaluator (pinned commits,
   fetched by `src.eval.get_evaluators`), the DAVIS 2017 and SA-V datasets, OpenCV (CSRT,
-  GrabCut).
+  GrabCut, the ViT tracker) and the VitTrack model `object_tracking_vittrack_2023sep.onnx` from
+  the OpenCV model zoo (sha256 pinned in `configs/recovery/vit.yaml`).

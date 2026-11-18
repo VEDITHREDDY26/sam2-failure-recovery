@@ -128,3 +128,39 @@ def test_frame_counts_demand_the_same_labelled_frames() -> None:
     fix = pd.DataFrame({**keys, "frame_index": [1], "failure": [False]})
     with pytest.raises(ValueError, match="same frames"):
         score.frame_counts(alone, fix)
+
+
+NEW_SOURCE_CONFIGS = {
+    "fix_rules_vit_reinit_tiny": (
+        "kind: recovery_run\nmethod: fix_rules_vit_reinit_tiny\ndetector: rules\n"
+        "box_source: vit_reinit\n" + EXTRA
+    ),
+    "fix_gated_rules_vit_anchored_tiny": (
+        "kind: gated_recovery_run\nmethod: fix_gated_rules_vit_anchored_tiny\ndetector: rules\n"
+        "box_source: vit_anchored\n" + EXTRA + "gate_config: configs/recovery/box_gate_tiny.yaml\n"
+    ),
+    "fix_gated_rules_motion_tiny": (
+        "kind: gated_recovery_run\nmethod: fix_gated_rules_motion_tiny\ndetector: rules\n"
+        "box_source: motion\n" + EXTRA + "gate_config: configs/recovery/box_gate_tiny.yaml\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("method", sorted(NEW_SOURCE_CONFIGS))
+def test_vit_motion_and_gated_runs_are_scored_with_their_gated_events(
+    world: tuple[Path, Path],
+    tmp_path: Path,
+    method: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out, subset = world
+    make_online_run(out, method=method)
+    write_events(out, method, SPLIT, "zebra", [(1, 3, "reprompted"), (1, 9, "gated")])
+    config = tmp_path / "run.yaml"
+    config.write_text(NEW_SOURCE_CONFIGS[method])
+    results = tmp_path / "results"
+    assert _score(subset, results, "--splits", SPLIT, config=str(config)) == 0
+    assert "1 re-prompts, 1 gated" in capsys.readouterr().out
+    events = pd.read_csv(results / f"events_{method}_{SPLIT}.csv")
+    assert list(events["action"]) == ["reprompted", "gated"]
+    assert (results / f"{method}_{SPLIT}.csv").is_file()

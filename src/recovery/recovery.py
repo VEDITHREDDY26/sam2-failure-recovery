@@ -20,9 +20,10 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from src.common.boxes import Box
+from src.common.boxes import Box, box_from_mask
 from src.recovery.box_check import BoxCheck
 from src.recovery.events import Event
+from src.recovery.gate import BoxGate
 from src.recovery.settings import RecoverySettings
 from src.recovery.sources import BoxSource, Detector, Frame
 from src.recovery.verify import CandidateRow, VerifyThresholds, candidate_features
@@ -46,7 +47,9 @@ class RecoveryRun:
         settings: RecoverySettings,
         verifier: VerifyThresholds | None = None,
         log_candidates: bool = False,
+        gate: BoxGate | None = None,
     ) -> None:
+        self.gate = gate if gate is not None and gate.active else None
         self.verifier = verifier
         self.log_candidates = log_candidates
         self.candidates: list[CandidateRow] = []
@@ -151,6 +154,7 @@ class RecoveryRun:
             last = self._last_reprompt.get(obj_id)
             if last is not None and index - last < self.settings.cooldown_frames:
                 events.append(Event(self._video, obj_id, index, fired, "cooldown"))
+                self.boxes.skip(obj_id, index, frame)
                 continue
             result = self.boxes.propose(obj_id, index, frame)
             if result.status != "ok" or result.box is None:
@@ -166,6 +170,13 @@ class RecoveryRun:
                     )
                 )
                 continue
+            if self.gate is not None:
+                why = self.gate.reason(result, box_from_mask(mask))
+                if why is not None:
+                    events.append(
+                        Event(self._video, obj_id, index, fired, "gated", why, result.raw_box)
+                    )
+                    continue
             check = self.box_check.check(
                 result.raw_box, shape, self.boxes.last_reliable_box(obj_id)
             )
