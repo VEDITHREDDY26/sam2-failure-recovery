@@ -58,6 +58,7 @@ class RuleThresholds:
 
     def __post_init__(self) -> None:
         """Reject non-finite or out-of-range thresholds with a ConfigError."""
+        # Check finiteness first, then the range of each threshold.
         values = dataclasses.astuple(self)
         if not all(math.isfinite(v) for v in values):
             raise ConfigError(f"rule thresholds must be finite: {self}")
@@ -136,6 +137,8 @@ def evidence(obs: FrameObs, prev: FrameObs | None) -> Evidence:
         The Evidence; entries that do not apply (no previous non-empty mask, or the wrong
         empty/non-empty case) are NaN so the corresponding rule cannot fire.
     """
+    # Evidence needs a previous non-empty mask: both frames non-empty gives area ratio and
+    # jump, empty now gives the disappearance numbers.
     area_ratio = jump = fraction = margin = _NAN
     if prev is not None and not prev.empty:
         if not obs.empty:

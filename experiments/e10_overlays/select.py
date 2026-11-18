@@ -197,6 +197,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--fix", default="fix_rules_csrt_tiny")
     parser.add_argument("--out", type=Path, default=Path(DEFAULT_OUT))
     args = parser.parse_args(argv)
+    # Build the selection from the E2 result CSVs, then write it for the overlay step.
     table = build_selection(args.results_dir, args.splits, args.alone, args.fix)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)

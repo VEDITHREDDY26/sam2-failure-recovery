@@ -384,6 +384,7 @@ def _cells(row: dict[str, str]) -> list[str]:
         Change in J&F with interval, better / worse / same counts, re-prompts (wrong),
         re-prompts at annotated frames (wrong) and FPS, as text.
     """
+    # Fix rows show video counts and re-prompt counts; baseline rows show dashes.
     counts = "--"
     if row["videos_improved"] != "":
         counts = f"{row['videos_improved']} / {row['videos_worse']} / {row['videos_unchanged']}"

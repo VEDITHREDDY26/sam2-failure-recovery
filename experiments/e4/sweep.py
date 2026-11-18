@@ -99,6 +99,8 @@ def _row(
         Dictionary with the COLUMNS keys: window counts, precision, recall, F1 and the flag.
     """
     flagged, tp, positives = int(hit.sum()), int((hit & truth).sum()), int(truth.sum())
+    # One sweep point: a window is flagged if the swept rules fire; precision, recall and F1
+    # are counted over windows.
     denominator = flagged + positives
     return {
         "model": model,
@@ -228,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("results/e4.csv"))
     parser.add_argument("--expect-videos", type=int, default=EXPECTED_VIDEOS)
     args = parser.parse_args(argv)
+    # Find the tuning data from --data-dir or the data root, then run the sweep.
     root = os.environ.get(DATA_ROOT_ENV)
     data_dir = args.data_dir or (Path(root) / "tune_rules" if root else None)
     if data_dir is None:
@@ -237,6 +240,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TuneInputError, ValueError, OSError) as error:
         sys.stdout.write(f"e4 sweep: refused: {error}\n")
         return 1
+    # Print the frozen operating point so it can be compared with the sweep by eye.
     for _, row in frame[frame["frozen"] & (frame["swept"] == "both")].iterrows():
         sys.stdout.write(
             f"{row['model']} ({SPLIT}) frozen point: precision={row['precision']:.3f} "

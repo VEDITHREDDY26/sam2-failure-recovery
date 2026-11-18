@@ -76,11 +76,13 @@ def load_scores(path: Path) -> list[ScoreRow]:
         E1Error: If the file is missing or empty, a J or F value is NaN or outside [0, 1],
             or a (video, object) pair appears twice.
     """
+    # Score values are fractions: a NaN or out-of-range J or F means the scorer output is broken.
     rows = read_scores_csv(_require(path))
     for row in rows:
         for name, value in (("J", row.j), ("F", row.f)):
             if math.isnan(value) or not 0.0 <= value <= 1.0:
                 raise E1Error(f"{path}: {row.video}/{row.object} has {name}={value}, not in [0,1]")
+    # A (video, object) pair must be scored once, otherwise the means would double count it.
     keys = [(r.video, r.object) for r in rows]
     if len(set(keys)) != len(keys):
         raise E1Error(f"{path}: duplicate (video, object) rows")

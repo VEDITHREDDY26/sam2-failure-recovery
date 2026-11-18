@@ -260,6 +260,7 @@ def _thumb(video: VideoSample, alone_dir: Path, row: pd.Series, index: int) -> I
 
 def _legend(sample_id: str, width: int) -> Image:
     """Build the colour-key banner shown above the strip, with the sample id."""
+    # The legend is a row of coloured text pieces placed left to right.
     band = np.zeros((LEGEND_HEIGHT, width, 3), dtype=np.uint8)
     parts = (
         (f"{sample_id}   ", WHITE),
@@ -269,6 +270,7 @@ def _legend(sample_id: str, width: int) -> Image:
         ("red", RED),
         (")", ORANGE),
     )
+    # Advance x by each piece's printed width so the next piece starts right after it.
     x = 10
     for text, colour in parts:
         cv2.putText(band, text, (x, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 1, cv2.LINE_AA)
@@ -344,6 +346,8 @@ def build_sample(
     Raises:
         SystemExit: If clips_dir is inside the repository.
     """
+    # Clips are large and must stay out of the repository; then draw the sample and save its
+    # CSV and a blank labelling template.
     check_outside_repo(clips_dir)
     sample = draw_sample(build_candidates(results_dir, output_root, load_video))
     write_csv(sample_out, SAMPLE_COLUMNS, list(sample.itertuples(index=False, name=None)))
@@ -352,6 +356,7 @@ def build_sample(
         TEMPLATE_COLUMNS,
         [(s, "", "") for s in sample["sample_id"]],
     )
+    # Render one image strip per sampled event, using its stored tracker box.
     with_boxes = event_boxes(results_dir, sample)
     for _, row in with_boxes.iterrows():
         video = load_video(str(row["split"]), str(row["video"]))
@@ -376,12 +381,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--sample-out", type=Path, default=Path("results/e10_types_sample.csv"))
     args = parser.parse_args(argv)
+    # Check output location and data root before loading anything.
     check_outside_repo(args.clips_dir)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     from experiments.e10_overlays.overlays import default_loader
     from src.sam2_runner.smoke import load_data_config
 
+    # Build the sample and its clips from the saved results, then report the counts.
     cfg = load_data_config()
     sample = build_sample(
         args.results_dir,

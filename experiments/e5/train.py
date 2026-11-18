@@ -118,9 +118,11 @@ def training_rows(
 ) -> tuple[FloatArray, npt.NDArray[np.bool_]]:
     """Features and failure label of every annotated frame after the object's prompt frame."""
     features, has_prev = table_features(table)
+    # Keep each row's position so its feature row can be found after the join with the labels.
     frame = table[["video", "object_id", "frame_index"]].copy()
     frame["row"] = np.arange(len(table))
     frame = frame[has_prev]
+    # Join with the failure labels; frames without a label are dropped.
     merged = frame.merge(
         labels[["video", "object_id", "frame_index", "failure"]],
         on=["video", "object_id", "frame_index"],
@@ -134,7 +136,9 @@ def fit(features: FloatArray, failure: npt.NDArray[np.bool_], sam2_model: str) -
     """Standardised, class-weighted logistic regression; the threshold is set later."""
     mean = features.mean(axis=0)
     std = features.std(axis=0)
+    # Avoid dividing by zero for constant features.
     std = np.where(std > 1e-9, std, 1.0)
+    # Balanced class weights because failures are rare; fixed seed for a reproducible fit.
     clf = LogisticRegression(class_weight="balanced", random_state=SEED, max_iter=1000)
     clf.fit((features - mean) / std, failure)
     return LearnedModel(
@@ -175,6 +179,7 @@ def window_counts(hit: npt.NDArray[np.bool_], truth: npt.NDArray[np.bool_]) -> d
         denominator is zero is 0.0.
     """
     flagged, tp, positives = int(hit.sum()), int((hit & truth).sum()), int(truth.sum())
+    # Counts over windows; F1 = 2 TP / (flagged + positives).
     denominator = flagged + positives
     return {
         "windows": len(truth),

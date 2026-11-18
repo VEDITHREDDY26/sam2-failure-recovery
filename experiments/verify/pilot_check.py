@@ -81,6 +81,7 @@ class VerifiedCheck:
 
     def as_row(self) -> tuple[object, ...]:
         """The values as a row in the order of CHECK_COLUMNS."""
+        # One CSV row per video; an empty difference means no mismatch was found.
         diff = "" if self.first_diff is None else self.first_diff
         return (
             self.video,

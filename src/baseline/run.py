@@ -131,9 +131,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--split", choices=SPLITS, required=True)
     parser.add_argument("--videos", nargs="+", default=None)
     parser.add_argument("--method", default=METHOD)
+    # Fail early, before touching any data, if the data root is not configured.
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Run the batch with the loaded configs; method names are validated against path rules.
     run_batch(
         load_data_config(),
         load_baseline_config(),

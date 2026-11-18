@@ -82,12 +82,14 @@ def output_names(method: str, split: str) -> dict[str, str]:
         ValueError: If a name starts with "sam2_" or "baseline", which would overwrite the SAM 2
             alone or baseline results.
     """
+    # File names follow one scheme so scoring, the table and the checks find each other.
     names = {
         "scores": f"{method}_{split}.csv",
         "timing": f"{method}_timing_{split}.csv",
         "frames": f"{method}_{split}_frames.csv",
         "events": f"events_{method}_{split}.csv",
     }
+    # Refuse names that would overwrite the SAM 2 alone or baseline results.
     for name in names.values():
         if name.startswith(("sam2_", "baseline")):
             raise ValueError(

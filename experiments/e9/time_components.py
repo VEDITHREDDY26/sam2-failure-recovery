@@ -182,9 +182,12 @@ class TimingPredictor:
         while True:
             synchronise()
             tick = time.perf_counter()
+            # Time only the work done to produce the next item, with the GPU
+            # synchronised before and after.
             item = next(stream, None)
             synchronise()
             spent = time.perf_counter() - tick
+            # During a replay the time is added directly; otherwise only real items are counted.
             if replay:
                 self.clock.seconds[name] = self.clock.seconds.get(name, 0.0) + spent
             elif item is not None:
@@ -442,6 +445,7 @@ def measure_model(
     def one_pass() -> list[VideoTiming]:
         """Time every sampled video once and return the per-video timings."""
         return [
+            # Time every video once with fresh detector and box-source objects.
             time_video(
                 predictor,
                 make_detector(),

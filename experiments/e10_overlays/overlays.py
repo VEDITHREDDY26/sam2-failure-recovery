@@ -72,6 +72,7 @@ def default_loader(cfg: DataConfig) -> LoadVideo:
     Returns:
         A function (split, video name) -> VideoSample for davis_val, sav_val and sav_test.
     """
+    # Imported here so the module can be used without the dataset loaders.
     from src.data.davis import load_davis_video
     from src.data.sav import load_sav_video
 
@@ -94,10 +95,12 @@ def default_loader(cfg: DataConfig) -> LoadVideo:
 def overlay_mask(frame_bgr: Image, label: LabelMap, alpha: float = ALPHA) -> Image:
     """Colour each object (DAVIS palette) over the frame and draw its outline; BGR in and out."""
     out = frame_bgr.astype(np.float32)
+    # Palette is RGB; flip to BGR because OpenCV drawing expects BGR.
     palette = np.array(davis_palette(), dtype=np.float32).reshape(-1, 3)[:, ::-1]
     for obj_id in (int(i) for i in np.unique(label) if i != 0):
         mask = label == obj_id
         out[mask] = (1 - alpha) * out[mask] + alpha * palette[obj_id]
+    # Draw an outline on top of the blended colour so thin objects stay visible.
     result = np.clip(out, 0, 255).astype(np.uint8)
     for obj_id in (int(i) for i in np.unique(label) if i != 0):
         found, _ = cv2.findContours(
@@ -125,12 +128,15 @@ def load_clip_frame(
     output_root: Path, row: pd.Series, video: VideoSample, frame_index: int | None = None
 ) -> ClipFrame:
     """Frame and the two methods' masks (read only) and the ground truth at one frame index."""
+    # Default to the frame of the selected event; masks of both methods are only read, never
+    # changed.
     index = int(row["frame_index"]) if frame_index is None else frame_index
     stem = video.frame_stems[index]
     image = cv2.imread(str(video.frame_path(index)), cv2.IMREAD_COLOR)
     if image is None:
         raise OSError(f"cannot read frame {video.frame_path(index)}")
     frame = np.asarray(image, dtype=np.uint8)
+    # Both methods store their masks under their own method name for the same split and frame.
     maps = [
         read_label_map(mask_path(output_root, str(row[key]), str(row["split"]), video.name, stem))
         for key in ("alone_method", "fix_method")
@@ -244,6 +250,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         argv: Command line arguments; defaults to sys.argv.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
+    # Parse arguments, check the data root, load the config, draw the figures, report the count.
     parser.add_argument("--selection", type=Path, default=Path("results/e10_selection.csv"))
     parser.add_argument("--figures-dir", type=Path, default=Path("figures"))
     args = parser.parse_args(argv)

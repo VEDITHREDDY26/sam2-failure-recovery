@@ -64,12 +64,14 @@ def choose_verifier(
     run_cfg: RecoveryRunConfig, model: str, split: str, log_candidates: bool
 ) -> VerifyThresholds | None:
     """Frozen thresholds for a verified run; refuses the tuning split and a missing freeze."""
+    # Unverified runs need no thresholds; candidate logging belongs only to the sav_val tuning run.
     if not isinstance(run_cfg, VerifiedRunConfig):
         if log_candidates and split != "sav_val":
             raise SystemExit(f"--log-candidates is for the sav_val tuning run, not '{split}'")
         return None
     if log_candidates:
         raise SystemExit("--log-candidates is for the accept-all run, not a verified config")
+    # Thresholds are fitted on sav_val, so verified runs there would be circular.
     if split == "sav_val":
         raise SystemExit(
             "verified runs are for davis_val and sav_test; sav_val is the tuning split"

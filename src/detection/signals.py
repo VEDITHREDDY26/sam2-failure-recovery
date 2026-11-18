@@ -151,6 +151,7 @@ def obs_from_row(row: pd.Series) -> FrameObs:
         The observation; a non-empty mask with an empty box is marked as box_unknown.
     """
     box = None
+    # Empty box cells are NaN; a non-empty mask without a box means the box is unknown.
     if not math.isnan(float(row["box_x0"])):
         box = Box(*(int(row[c]) for c in BOX_COLS))
     unknown = box is None and int(row["area"]) > 0

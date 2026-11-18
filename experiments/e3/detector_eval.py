@@ -257,6 +257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--subset-file", type=Path, default=SUBSET_FILE)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES_PATH)
+    # Check the data root before running; evaluation errors are printed and give exit code 1.
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
@@ -265,6 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (DetectorEvalError, OSError) as error:
         sys.stdout.write(f"e3 detector_eval: {error}\n")
         return 1
+    # List every file the evaluation wrote; exit code 0 means all splits finished.
     for path in written:
         sys.stdout.write(f"wrote {path}\n")
     return 0

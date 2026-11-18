@@ -99,6 +99,7 @@ def obs_features(ev: Evidence, obs: FrameObs) -> FloatArray:
         A vector with one value per name in FEATURE_NAMES, computed by the same code as the batch
         path so streaming and batch features agree.
     """
+    # Wrap the single frame as one-row arrays so it goes through the same feature code as batch.
     arrays = {
         "score": np.array([ev.score]),
         "area_ratio": np.array([ev.area_ratio]),
@@ -171,6 +172,7 @@ class LearnedModel:
 
 def model_text(model: LearnedModel) -> str:
     """Serialise a model to a stable JSON string (sorted keys, indented, trailing newline)."""
+    # Fields are written with sorted keys so the file, and its hash, are stable.
     body = {
         "kind": "logreg",
         "sam2_model": model.sam2_model,
@@ -214,6 +216,7 @@ def load_model(path: Path, expected_sha256: str | None = None) -> LearnedModel:
     if expected_sha256 is not None and sha256_of(path) != expected_sha256:
         raise ModelFileError(f"{path}: sha256 does not match the pinned hash")
     try:
+        # Rebuild the model from the file; any missing or malformed field becomes ModelFileError.
         body = json.loads(path.read_text())
         return LearnedModel(
             str(body["sam2_model"]),

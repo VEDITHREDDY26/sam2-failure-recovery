@@ -46,6 +46,8 @@ def judge_event(
     video: VideoSample, output_root: Path, method: str, split: str, obj_id: int, frame_index: int
 ) -> tuple[int | str, float | str, bool | str]:
     """(gt frame used, iou, wrong), blanks if no annotated frame at or after the re-prompt."""
+    # Judge the re-prompt on the first annotated frame at or after it, because SA-V annotates
+    # sparsely.
     later = [f for f in video.annotated_frames(obj_id) if f >= frame_index]
     if not later:
         return "", "", ""
@@ -53,6 +55,8 @@ def judge_event(
     gt = video.gt_mask(obj_id, gt_frame)
     if gt is None:
         return "", "", ""
+    # Compare the saved mask of the fixed run with the ground truth; an IoU below FAILURE_IOU
+    # counts as wrong.
     stem = video.frame_stems[gt_frame]
     label = read_label_map(mask_path(output_root, method, split, video.name, stem))
     iou = mask_iou(label == obj_id, gt)

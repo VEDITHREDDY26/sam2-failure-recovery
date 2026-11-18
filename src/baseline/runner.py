@@ -114,6 +114,7 @@ def _row(
     video: str, obj: int, frame: int, ok: bool | None, box: Box | None, fallback: bool, area: int
 ) -> dict[str, object]:
     """Build one status-table row; no box gives missing coordinates, ok=None = not started."""
+    # One status row = one object on one frame; box columns are empty when there is no usable box.
     coords = (box.x0, box.y0, box.x1, box.y1) if box else (None, None, None, None)
     return {
         "video": video,
@@ -168,6 +169,8 @@ def _step_object(
     shape: tuple[int, int],
 ) -> tuple[BoolMask, bool | None, Box | None, bool]:
     """Returns (mask, tracker_ok, box, grabcut_fallback) for one object on one frame."""
+    # Before the object's first annotated frame nothing is tracked; at the start frame the
+    # tracker is created from the prompt box; later frames update the tracker.
     empty = np.zeros(shape, dtype=np.bool_)
     if frame_index < state.start:
         return empty, None, None, False
@@ -178,6 +181,7 @@ def _step_object(
         mask, fallback = _cut(frame_bgr, box, cfg)
         return mask, True, box, fallback
     assert state.tracker is not None
+    # A lost or unusable box gives an empty mask and the loss is recorded in the status row.
     result = state.tracker.update(frame_bgr)
     if result.box is None:
         return empty, result.ok, None, False

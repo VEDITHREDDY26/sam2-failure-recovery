@@ -53,6 +53,7 @@ def panel_bars(rows: list[dict[str, str]], split: str) -> list[tuple[float, dict
     """(x position, row) for the ladder rows of one split, Tiny first and Large after a gap."""
     bars: list[tuple[float, dict[str, str]]] = []
     x = 0.0
+    # Models appear in file order; within a model the bars follow ROLE_ORDER.
     for model in dict.fromkeys(r["model"] for r in rows):
         picked = [
             r
@@ -63,6 +64,7 @@ def panel_bars(rows: list[dict[str, str]], split: str) -> list[tuple[float, dict
         for row in picked:
             bars.append((x, row))
             x += 1.0
+        # Leave a gap between the Tiny and Large groups.
         x += GAP
     return bars
 

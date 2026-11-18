@@ -326,6 +326,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--splits", nargs="+", choices=TEST_SETS, default=list(TEST_SETS))
     args = parser.parse_args(argv)
+    # Build the table and the merged events from the per-run CSVs, then write both files.
     table, events = build_tables(Path(args.results_dir), args.models, args.splits)
     write_table(Path(args.out), table)
     Path(args.events_out).parent.mkdir(parents=True, exist_ok=True)

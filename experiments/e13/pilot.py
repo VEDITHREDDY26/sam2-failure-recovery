@@ -186,11 +186,14 @@ def make_source(arm: str, factory: ViTFactory | None, anchor_iou: float) -> BoxS
 
 def classify(video: VideoSample, obj_id: int, t: int, labels: Callable[[int], LabelMap]) -> Truth:
     """Scored frame = t when annotated, else the first annotated frame after it."""
+    # SA-V is annotated sparsely, so use the first annotated frame at or after t as the reference.
     later = [f for f in video.annotated_frames(obj_id) if f >= t]
     gt = video.gt_mask(obj_id, later[0]) if later else None
     if gt is None:
         return Truth(None, None, None, None, "unscored")
     frame = later[0]
+    # If the object is absent in the ground truth the frame is not scored; otherwise a low IoU
+    # with SAM 2 means a real failure.
     visible = bool(gt.any())
     iou = mask_iou(labels(frame) == obj_id, gt)
     if not visible:
@@ -259,9 +262,11 @@ def _row(
     Returns:
         The row values.
     """
+    # Boxes are written as four columns each, or four empty cells when there is none.
     raw, box = result.raw_box, result.box
     raw_c = (raw.x0, raw.y0, raw.x1, raw.y1) if raw else ("",) * 4
     box_c = (box.x0, box.y0, box.x1, box.y1) if box else ("",) * 4
+    # IoUs are only meaningful when the source returned a usable box.
     ok = result.status == "ok" and box is not None
     iou_sam2 = box_iou(box, sam2_box) if ok else ""
     iou_gt = box_iou(box, truth.gt_box) if ok and truth.gt_box is not None else ""

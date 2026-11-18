@@ -189,6 +189,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--after", type=int, default=30)
     parser.add_argument("--fps", type=int, default=10)
     args = parser.parse_args(argv)
+    # Validate the output path and data root first, then build the demo from the selection.
     check_output_path(args.out)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
@@ -204,6 +205,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.after,
         args.fps,
     )
+    # Report how many frames were written.
     print(f"{count} frames -> {args.out}")
 
 

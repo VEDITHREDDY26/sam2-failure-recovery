@@ -75,12 +75,14 @@ def pad_to_min_side(box: Box, min_side: int, height: int, width: int) -> Box:
         Returns:
             The new (lo, hi) pair in pixels.
         """
+        # Split the missing length evenly on both sides, then slide the span back inside the frame.
         extra = max(min_side - (hi - lo), 0)
         lo, hi = lo - extra // 2, hi + (extra - extra // 2)
         shift = max(-lo, 0) - max(hi - limit, 0)
         lo, hi = lo + shift, hi + shift
         return max(lo, 0), min(hi, limit)
 
+    # Each axis is grown independently, then clipped to the frame.
     x0, x1 = grow(box.x0, box.x1, width)
     y0, y1 = grow(box.y0, box.y1, height)
     return Box(x0, y0, x1, y1)

@@ -292,10 +292,12 @@ def build_spike_predictor(
     """Official builder; the flag is a Hydra override, SAM 2 code is unchanged (Colab only)."""
     cfg = load_models_config()
     spec = cfg.tiny if model == "tiny" else cfg.large
+    # Checkpoint paths come from the config and data root, never hard-coded.
     ckpt = cfg.checkpoint_path(data_root, spec)
     if not ckpt.is_file():
         raise FileNotFoundError(f"{ckpt} not found; run scripts/get_checkpoints.sh")
     build = importlib.import_module("sam2.build_sam").build_sam2_video_predictor
+    # Optionally let SAM 2 add all frames to its memory (override applied at build time).
     extra = [ADD_ALL_OVERRIDE] if add_all_frames else []
     predictor: VideoPredictor = build(
         spec.model_cfg, str(ckpt), device=device, hydra_overrides_extra=extra

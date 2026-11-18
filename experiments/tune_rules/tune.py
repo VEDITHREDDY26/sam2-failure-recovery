@@ -391,6 +391,7 @@ def _choice_at(
         tp: True-positive windows of this point, from the search.
     """
     cfg = thresholds_at(point)
+    # Per-rule flag counts and true positives show which rules do the work at this point.
     per_rule = rule_window_flags(table, windows, cfg)
     return Choice(
         cfg,
@@ -480,6 +481,7 @@ def results_row(
     Returns:
         Dictionary with thresholds, window counts, precision, recall, F1 and per-rule counts.
     """
+    # One results row = one chosen operating point of one model: thresholds, counts and metrics.
     cfg = choice.thresholds
     row: dict[str, object] = {
         "model": model,
@@ -500,6 +502,7 @@ def results_row(
         "f1": choice.f1,
     }
     for name in ALL_RULES:
+        # Per-rule columns so the table shows which rules fired and were right.
         row[f"fires_{name}"] = choice.per_rule_fires[name]
         row[f"tp_{name}"] = choice.per_rule_tp[name]
     return row
@@ -599,6 +602,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--results-out", type=Path, default=Path("results/rules_sav_val.csv"))
     parser.add_argument("--expect-videos", type=int, default=EXPECTED_VIDEOS)
     args = parser.parse_args(argv)
+    # Find the tuning data, then fit and freeze the thresholds on sav_val only.
     root = os.environ.get(DATA_ROOT_ENV)
     data_dir = args.data_dir or (Path(root) / "tune_rules" if root else None)
     if data_dir is None:
@@ -608,6 +612,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TuneInputError, ValueError, OSError) as error:
         sys.stdout.write(f"tune: refused: {error}\n")
         return 1
+    # Print a summary per model and selection; exit code 0 on success, 1 on refused input.
     for row in rows:
         sys.stdout.write(
             f"{row['model']} {row['selection']}: windows={row['windows']} "
