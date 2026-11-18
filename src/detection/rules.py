@@ -37,6 +37,19 @@ MODELS = ("tiny", "large")
 
 @dataclasses.dataclass(frozen=True)
 class RuleThresholds:
+    """Thresholds of the four failure rules for one SAM 2 model size.
+
+    Attributes:
+        score_threshold: low_score fires when the object score is below this value.
+        area_ratio: area_change fires when the larger/smaller area ratio exceeds this (> 1).
+        jump_ratio: centre_jump fires when the centre distance divided by sqrt(previous area)
+            exceeds this (> 0).
+        min_area_fraction: disappearance needs the previous mask to cover at least this fraction
+            of the frame (in (0, 1]).
+        border_margin_px: disappearance needs the previous box to be at least this many pixels
+            from every image edge (0 or more).
+    """
+
     score_threshold: float
     area_ratio: float
     jump_ratio: float
@@ -44,6 +57,7 @@ class RuleThresholds:
     border_margin_px: float
 
     def __post_init__(self) -> None:
+        """Reject non-finite or out-of-range thresholds with a ConfigError."""
         values = dataclasses.astuple(self)
         if not all(math.isfinite(v) for v in values):
             raise ConfigError(f"rule thresholds must be finite: {self}")
@@ -60,16 +74,37 @@ class RuleThresholds:
 @register("rules")
 @dataclasses.dataclass(frozen=True)
 class RulesConfig:
+    """Frozen rule settings loaded from the detector rules YAML file.
+
+    Attributes:
+        tiny: Thresholds for SAM 2.1 Hiera-Tiny.
+        large: Thresholds for SAM 2.1 Hiera-Large.
+    """
+
     tiny: RuleThresholds
     large: RuleThresholds
 
     def for_model(self, model: str) -> RuleThresholds:
+        """Return the thresholds of one model size.
+
+        Raises:
+            ConfigError: If the model is not "tiny" or "large".
+        """
         if model not in MODELS:
             raise ConfigError(f"unknown model '{model}' (known: {list(MODELS)})")
         return self.tiny if model == "tiny" else self.large
 
 
 def load_rules_config(model: str, path: str | Path = DEFAULT_RULES_PATH) -> RuleThresholds:
+    """Load the rule thresholds of one model from a rules YAML file.
+
+    Args:
+        model: "tiny" or "large".
+        path: Rules file; configs/detector/rules.yaml by default.
+
+    Raises:
+        ConfigError: If the file is not a rules config or the model is unknown.
+    """
     config = load_config(path)
     if not isinstance(config, RulesConfig):
         raise ConfigError(f"{path}: not a rules config")
@@ -91,6 +126,16 @@ _NAN = float("nan")
 
 
 def evidence(obs: FrameObs, prev: FrameObs | None) -> Evidence:
+    """Compute the numbers each rule compares with its threshold for one frame.
+
+    Args:
+        obs: Observation at the current frame t.
+        prev: Observation of the same object at t-1, or None on the object's first frame.
+
+    Returns:
+        The Evidence; entries that do not apply (no previous non-empty mask, or the wrong
+        empty/non-empty case) are NaN so the corresponding rule cannot fire.
+    """
     area_ratio = jump = fraction = margin = _NAN
     if prev is not None and not prev.empty:
         if not obs.empty:
@@ -109,6 +154,16 @@ def evidence(obs: FrameObs, prev: FrameObs | None) -> Evidence:
 def fired_rules(
     ev: Evidence, cfg: RuleThresholds, enabled: Iterable[str] = ALL_RULES
 ) -> tuple[str, ...]:
+    """Return the names of the enabled rules whose evidence passes its threshold.
+
+    Args:
+        ev: Evidence for the frame.
+        cfg: Thresholds.
+        enabled: Rule names allowed to fire.
+
+    Returns:
+        Fired rule names in the fixed order of ALL_RULES (NaN evidence never fires).
+    """
     on = set(enabled)
     tests = {
         LOW_SCORE: ev.score < cfg.score_threshold,
@@ -122,6 +177,13 @@ def fired_rules(
 
 @dataclasses.dataclass(frozen=True)
 class Decision:
+    """Outcome of the rule detector for one frame.
+
+    Attributes:
+        flag: True if at least one enabled rule fired.
+        fired: Names of the rules that fired.
+    """
+
     flag: bool
     fired: tuple[str, ...]
 
@@ -130,6 +192,15 @@ class RuleDetector:
     """Streaming detector for one object; keeps only the previous observation."""
 
     def __init__(self, config: RuleThresholds, enabled: Iterable[str] = ALL_RULES) -> None:
+        """Create a detector for one object.
+
+        Args:
+            config: Rule thresholds.
+            enabled: Rule names that may fire.
+
+        Raises:
+            ValueError: If a rule name is unknown.
+        """
         self.config = config
         self.enabled = tuple(enabled)
         unknown = set(self.enabled) - set(ALL_RULES)
@@ -138,6 +209,14 @@ class RuleDetector:
         self._prev: FrameObs | None = None
 
     def update(self, obs: FrameObs) -> Decision:
+        """Process the next frame of the object and return the decision.
+
+        The first frame has no history and never flags.
+
+        Args:
+            obs: Observation at the current frame.
+        """
+        # Remember this frame for the next call.
         prev, self._prev = self._prev, obs
         if prev is None:
             return Decision(False, ())
@@ -151,6 +230,7 @@ def batch_evidence(table: pd.DataFrame) -> pd.DataFrame:
     The first row of each object has all evidence NaN (no history, never flags), so low_score
     is also silent there, matching RuleDetector.
     """
+    # Previous-frame values come from a per-object shift, mirroring RuleDetector's t-1 memory.
     group = table.groupby(["video", "object_id"], sort=False)
     has_prev = group["frame_index"].shift(1).notna().to_numpy()
     area = table["area"].to_numpy(dtype=float)
@@ -158,13 +238,16 @@ def batch_evidence(table: pd.DataFrame) -> pd.DataFrame:
     cx, cy = table["centre_x"].to_numpy(), table["centre_y"].to_numpy()
     pcx = group["centre_x"].shift(1).to_numpy(dtype=float)
     pcy = group["centre_y"].shift(1).to_numpy(dtype=float)
+    # 'both' = object present at t-1 and t; 'gone' = present at t-1, empty at t.
     both = has_prev & (area > 0) & (prev_area > 0)
     gone = has_prev & (area == 0) & (prev_area > 0)
+    # Division by zero areas gives inf/NaN; those rows are masked out below.
     with np.errstate(all="ignore"):
         ratio = np.maximum(area / prev_area, prev_area / area)
         jump = np.hypot(cx - pcx, cy - pcy) / np.sqrt(prev_area)
         frame_area = (table["height"] * table["width"]).to_numpy(dtype=float)
         fraction = prev_area / frame_area
+    # Distance of the previous box to each image edge; the smallest one is the margin.
     margins = pd.concat(
         [
             group["box_x0"].shift(1),
@@ -174,6 +257,7 @@ def batch_evidence(table: pd.DataFrame) -> pd.DataFrame:
         ],
         axis=1,
     ).min(axis=1, skipna=False)
+    # The first row of an object has no history, so its evidence is all NaN.
     return pd.DataFrame(
         {
             "score": np.where(has_prev, table["object_score"].to_numpy(dtype=float), np.nan),
@@ -203,6 +287,7 @@ def batch_flags(
         index=table.index,
     )
     for name in ALL_RULES:
+        # Disabled rules never fire.
         if name not in on:
             out[name] = False
     out["flag"] = out[list(ALL_RULES)].any(axis=1)

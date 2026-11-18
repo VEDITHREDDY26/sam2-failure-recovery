@@ -30,20 +30,51 @@ def rgb_to_bgr(image: RgbImage) -> BgrImage:
 
 @dataclass(frozen=True)
 class TrackResult:
+    """Outcome of one tracker update.
+
+    Attributes:
+        ok: Whether OpenCV's tracker reported that it still follows the object.
+        box: Tracked box (x0, y0, x1, y1) in pixels, clipped to the frame; None when the tracker
+            failed or the box is unusable (empty, off-frame or smaller than the minimum side).
+    """
+
     ok: bool
     box: Box | None  # clipped to the frame; None when the tracker failed or the box is unusable
 
 
 class BoxTracker(Protocol):
-    def init(self, frame: BgrImage, box: Box) -> None: ...
+    """Interface of a single-object box tracker (initialised once, then updated per frame)."""
 
-    def update(self, frame: BgrImage) -> TrackResult: ...
+    def init(self, frame: BgrImage, box: Box) -> None:
+        """Start tracking the object inside `box` on `frame`.
+
+        Args:
+            frame: First frame, as a BGR image.
+            box: Object box (x0, y0, x1, y1) in pixels.
+        """
+        ...
+
+    def update(self, frame: BgrImage) -> TrackResult:
+        """Follow the object into the next frame.
+
+        Args:
+            frame: Next frame, as a BGR image.
+
+        Returns:
+            A TrackResult with the new box, or no box if the object was lost.
+        """
+        ...
 
 
 def pad_to_min_side(box: Box, min_side: int, height: int, width: int) -> Box:
     """Grow a box around its centre so both sides are at least `min_side`, kept inside the frame."""
 
     def grow(lo: int, hi: int, limit: int) -> tuple[int, int]:
+        """Grow one axis [lo, hi) to at least `min_side`, then shift it back inside [0, limit].
+
+        Returns:
+            The new (lo, hi) pair in pixels.
+        """
         extra = max(min_side - (hi - lo), 0)
         lo, hi = lo - extra // 2, hi + (extra - extra // 2)
         shift = max(-lo, 0) - max(hi - limit, 0)
@@ -56,16 +87,32 @@ def pad_to_min_side(box: Box, min_side: int, height: int, width: int) -> Box:
 
 
 class CsrtTracker:
+    """OpenCV CSRT tracker wrapped to take and return xyxy boxes.
+
+    Args:
+        min_side: Tracked boxes whose clipped width or height is below this many pixels are
+            reported as unusable.
+    """
+
     def __init__(self, min_side: int) -> None:
+        """Create an uninitialised CSRT tracker; call init before update."""
         self._min_side = min_side
         self._tracker = cv2.TrackerCSRT_create()  # type: ignore[attr-defined]
         self._shape = (0, 0)
 
     def init(self, frame: BgrImage, box: Box) -> None:
+        """Initialise the tracker on `frame` with an xyxy box (converted to xywh here)."""
         self._shape = (frame.shape[0], frame.shape[1])
         self._tracker.init(frame, to_xywh(box))
 
     def update(self, frame: BgrImage) -> TrackResult:
+        """Track into the next frame and return the clipped, validated box.
+
+        Returns:
+            TrackResult(False, None) if CSRT reports failure; TrackResult(True, None) if it reports
+            success but the box is empty, off-frame or too small; otherwise TrackResult(True, box).
+        """
+        # CSRT returns floating-point xywh; round to pixels and drop degenerate rectangles.
         ok, rect = self._tracker.update(frame)
         if not ok:
             return TrackResult(False, None)
@@ -80,6 +127,7 @@ class CsrtTracker:
 
 def grabcut_in_box(frame: BgrImage, box: Box, iterations: int, margin_frac: float) -> BoolMask:
     """GrabCut with a rectangle on a crop around the box; full-frame bool mask, empty on failure."""
+    # Crop to the box plus a margin so GrabCut works on a small region, not the whole frame.
     height, width = frame.shape[:2]
     mx, my = round(box.width * margin_frac), round(box.height * margin_frac)
     roi = clip(Box(box.x0 - mx, box.y0 - my, box.x1 + mx, box.y1 + my), height, width)
@@ -87,6 +135,7 @@ def grabcut_in_box(frame: BgrImage, box: Box, iterations: int, margin_frac: floa
     if roi is None:
         return out
     crop = np.ascontiguousarray(frame[roi.y0 : roi.y1, roi.x0 : roi.x1])
+    # GrabCut is seeded with a rectangle only: everything outside it is background.
     labels = np.zeros(crop.shape[:2], dtype=np.uint8)
     rect = (box.x0 - roi.x0, box.y0 - roi.y0, box.width, box.height)
     bgd = np.zeros((1, 65), dtype=np.float64)
@@ -95,6 +144,7 @@ def grabcut_in_box(frame: BgrImage, box: Box, iterations: int, margin_frac: floa
         cv2.grabCut(crop, labels, rect, bgd, fgd, iterations, cv2.GC_INIT_WITH_RECT)
     except cv2.error:
         return out
+    # Keep definite and probable foreground, then paste back into a full-frame mask.
     foreground = (labels == cv2.GC_FGD) | (labels == cv2.GC_PR_FGD)
     out[roi.y0 : roi.y1, roi.x0 : roi.x1] = foreground
     return out

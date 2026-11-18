@@ -31,6 +31,11 @@ SPLITS = ("val", "test")
 
 
 def split_folder(cfg: DataConfig, split: str) -> str:
+    """Return the folder name of an SA-V split from the configuration.
+
+    Raises:
+        ValueError: If the split is not "val" or "test".
+    """
     if split == "val":
         return cfg.sav.val_split
     if split == "test":
@@ -39,15 +44,23 @@ def split_folder(cfg: DataConfig, split: str) -> str:
 
 
 def split_root(cfg: DataConfig, split: str) -> Path:
+    """Return the absolute folder of an SA-V split."""
     return cfg.resolve(cfg.sav.root) / split_folder(cfg, split)
 
 
 def list_file(cfg: DataConfig, split: str) -> Path:
+    """Return the path of the text file listing the video ids of an SA-V split."""
     folder = split_folder(cfg, split)
     return split_root(cfg, split) / f"{folder}.txt"
 
 
 def list_sav_videos(cfg: DataConfig, split: str) -> tuple[str, ...]:
+    """List the video ids of an SA-V split from its text file.
+
+    Raises:
+        FileNotFoundError: If the list file is missing.
+        ValueError: If a video id appears twice.
+    """
     path = list_file(cfg, split)
     if not path.is_file():
         raise FileNotFoundError(f"SA-V video list not found: {path}")
@@ -58,6 +71,11 @@ def list_sav_videos(cfg: DataConfig, split: str) -> tuple[str, ...]:
 
 
 def object_id_from_folder(folder: str) -> int:
+    """Convert an object folder name ("000", "001", ...) to its object id (number plus 1).
+
+    Raises:
+        ValueError: If the name is not numeric or the id exceeds the supported maximum.
+    """
     if not folder.isdigit():
         raise ValueError(f"object folder '{folder}' is not numeric")
     obj_id = int(folder) + 1
@@ -67,6 +85,11 @@ def object_id_from_folder(folder: str) -> int:
 
 
 def _stems(directory: Path, suffix: str) -> tuple[str, ...]:
+    """List the numerically sorted file stems of the files with a given suffix in a folder.
+
+    Raises:
+        FileNotFoundError: If the folder does not exist.
+    """
     if not directory.is_dir():
         raise FileNotFoundError(f"folder not found: {directory}")
     return sort_stems(p.stem for p in directory.iterdir() if p.suffix.lower() == suffix)
@@ -76,15 +99,31 @@ class SavReader:
     """Per-object sparse masks; frames are indexed by position in the 24 fps frame list."""
 
     def __init__(self, paths: dict[int, dict[int, Path]]) -> None:
+        """Store the annotation file paths.
+
+        Args:
+            paths: For each object id, a map from 0-based frame index (in the 24 fps frame list) to
+                the mask PNG of that annotated frame.
+        """
         self._paths = paths
 
     def annotated_frames(self, obj_id: int) -> tuple[int, ...]:
+        """Return the ascending frame indices that have a mask PNG for the object."""
         return tuple(sorted(self._paths[obj_id]))
 
     def annotation_path(self, obj_id: int, frame_index: int) -> Path:
+        """Return the mask PNG path of an annotated (object, frame) pair."""
         return self._paths[obj_id][frame_index]
 
     def read_mask(self, obj_id: int, frame_index: int) -> BoolMask:
+        """Read the binary mask PNG of an annotated pair.
+
+        Returns:
+            Boolean HxW mask, True where the PNG is nonzero.
+
+        Raises:
+            ValueError: If the PNG has more than one channel.
+        """
         path = self._paths[obj_id][frame_index]
         with Image.open(path) as image:
             mask = np.array(image) > 0
@@ -96,6 +135,16 @@ class SavReader:
 def _object_paths(
     annotations_dir: Path, folder: str, frame_index_of: dict[str, int]
 ) -> dict[int, Path]:
+    """Map the annotated frame indices of one object to their mask PNG paths.
+
+    Args:
+        annotations_dir: Folder with one subfolder per object.
+        folder: Name of this object's subfolder.
+        frame_index_of: Map from frame stem to 0-based frame index.
+
+    Raises:
+        ValueError: If a PNG has no matching frame or the object has no PNGs.
+    """
     obj_dir = annotations_dir / folder
     paths: dict[int, Path] = {}
     for stem in _stems(obj_dir, ANNOTATION_SUFFIX):
@@ -108,6 +157,21 @@ def _object_paths(
 
 
 def load_sav_video(cfg: DataConfig, split: str, name: str) -> VideoSample:
+    """Load one SA-V video with all its object folders.
+
+    Args:
+        cfg: Data configuration.
+        split: "val" or "test".
+        name: Video id; must be in the split's list.
+
+    Returns:
+        A VideoSample with sparse ground truth (every 4th frame of the 24 fps frames).
+
+    Raises:
+        KeyError: If the video is not in the split.
+        FileNotFoundError: If frames or annotations are missing.
+        ValueError: If object folders are missing or map to duplicate ids.
+    """
     validate_name(name, "video")
     if name not in list_sav_videos(cfg, split):
         raise KeyError(f"video '{name}' is not in the SA-V {split} list")
@@ -119,6 +183,7 @@ def load_sav_video(cfg: DataConfig, split: str, name: str) -> VideoSample:
         raise FileNotFoundError(f"{frames_dir}: no {FRAME_SUFFIX} frames")
     if not annotations_dir.is_dir():
         raise FileNotFoundError(f"folder not found: {annotations_dir}")
+    # Annotation PNGs are matched to frames by file stem, giving 0-based frame indices.
     index_of = {stem: i for i, stem in enumerate(stems)}
     folders = sorted((p.name for p in annotations_dir.iterdir() if p.is_dir()), key=_folder_key)
     ids = {folder: object_id_from_folder(folder) for folder in folders}
@@ -126,6 +191,7 @@ def load_sav_video(cfg: DataConfig, split: str, name: str) -> VideoSample:
         raise ValueError(f"{annotations_dir}: no object folders")
     if len(set(ids.values())) != len(ids):
         raise ValueError(f"{annotations_dir}: object folders map to duplicate ids")
+    # Read the annotated frames of each object; objects stay separate because they can overlap.
     paths = {ids[f]: _object_paths(annotations_dir, f, index_of) for f in folders}
     ordered = tuple(sorted(paths))
     return VideoSample(
@@ -142,4 +208,5 @@ def load_sav_video(cfg: DataConfig, split: str, name: str) -> VideoSample:
 
 
 def _folder_key(folder: str) -> tuple[int, str]:
+    """Sort key that orders numeric folder names by value and puts other names first."""
     return (int(folder), folder) if folder.isdigit() else (-1, folder)

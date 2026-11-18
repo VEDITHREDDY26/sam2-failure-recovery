@@ -55,6 +55,16 @@ HARDWARE_COLUMNS = (("gpu_name", "GPU"), ("cpu_model", "CPU"))
 
 @dataclass(frozen=True)
 class MethodSpec:
+    """One row group of the main table.
+
+    Attributes:
+        name: Method name as used in the results.
+        label: Name shown in the printed table.
+        file_prefix: Prefix of this method's score and timing CSV file names.
+        alone: Name of the SAM 2 run of the same size to compare against, or None if the method is
+            not a fix.
+    """
+
     name: str
     label: str
     file_prefix: str
@@ -76,18 +86,39 @@ class TableError(ValueError):
 
 @dataclass(frozen=True)
 class Timing:
+    """Per-video timing of one method on one test set.
+
+    Attributes:
+        frames: Frame count of each video.
+        compute_s: Compute seconds of each video (positive and finite).
+        hardware: Sorted, de-duplicated device descriptions found in the file.
+    """
+
     frames: dict[str, int]
     compute_s: dict[str, float]
     hardware: tuple[str, ...]
 
 
 def _require(path: Path) -> Path:
+    """Return the path if the file exists; raise TableError otherwise."""
     if not path.is_file():
         raise TableError(f"missing input file: {path}")
     return path
 
 
 def load_scores(path: Path) -> list[ScoreRow]:
+    """Read and validate a per-object score CSV.
+
+    Args:
+        path: CSV written by the scoring step; J, F and J&F are fractions in [0, 1].
+
+    Returns:
+        The score rows.
+
+    Raises:
+        TableError: If the file is missing, empty, has a duplicate (video, object) or a score
+            outside [0, 1].
+    """
     rows = read_scores_csv(_require(path))
     if not rows:
         raise TableError(f"{path}: no rows")
@@ -101,6 +132,17 @@ def load_scores(path: Path) -> list[ScoreRow]:
 
 
 def load_timing(path: Path) -> Timing:
+    """Read and validate a per-video timing CSV.
+
+    Args:
+        path: CSV with video, frames, compute_s and a GPU or CPU name column.
+
+    Returns:
+        The Timing with frame counts, compute seconds and hardware names.
+
+    Raises:
+        TableError: If the file is missing, empty, lacks a required column or has an unusable row.
+    """
     _require(path)
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
@@ -111,6 +153,7 @@ def load_timing(path: Path) -> Timing:
         frames: dict[str, int] = {}
         compute: dict[str, float] = {}
         hardware: list[str] = []
+        # Each video must appear once with a positive frame count and a positive, finite time.
         for r in reader:
             video = r["video"]
             n, secs = int(r["frames"]), float(r["compute_s"])
@@ -126,6 +169,7 @@ def load_timing(path: Path) -> Timing:
 
 
 def per_video_scores(rows: Sequence[ScoreRow]) -> dict[str, list[float]]:
+    """Group J&F values by video, objects in sorted order."""
     grouped: dict[str, list[float]] = {}
     for row in sorted(rows, key=lambda r: (r.video, r.object)):
         grouped.setdefault(row.video, []).append(row.jf)
@@ -137,6 +181,8 @@ def count_changes(
 ) -> tuple[int, int, int]:
     """(improved, worse, unchanged) over videos; per-video J&F is the mean over its objects."""
     improved = worse = unchanged = 0
+    # Per-video change in J&F (mean over its objects); changes smaller than UNCHANGED_TOL
+    # count as unchanged.
     for video, values in alone.items():
         delta = sum(fix[video]) / len(fix[video]) - sum(values) / len(values)
         if delta >= UNCHANGED_TOL:
@@ -151,6 +197,11 @@ def count_changes(
 def _load_method(
     results_dir: Path, spec: MethodSpec, test_set: str
 ) -> tuple[list[ScoreRow], Timing]:
+    """Load the score and timing files of one method on one test set.
+
+    Raises:
+        TableError: If a file is invalid or the score and timing files cover different videos.
+    """
     rows = load_scores(results_dir / f"{spec.file_prefix}_{test_set}.csv")
     timing = load_timing(results_dir / f"{spec.file_prefix}_timing_{test_set}.csv")
     if {r.video for r in rows} != set(timing.frames):
@@ -159,9 +210,23 @@ def _load_method(
 
 
 def build_table(results_dir: Path) -> list[dict[str, object]]:
+    """Compute every row of the main table from the per-video CSVs in the results folder.
+
+    Args:
+        results_dir: Folder with the score and timing CSVs of all methods and test sets.
+
+    Returns:
+        One dict per (method, test set) with the table columns. Fix rows also hold the paired
+        change against SAM 2 alone and the improved / worse / unchanged video counts.
+
+    Raises:
+        TableError: If any input is missing or methods do not score the same videos and objects.
+    """
     table: list[dict[str, object]] = []
     for test_set in TEST_SETS:
+        # Load all methods first, so any missing file stops the build before output.
         loaded = {spec.name: _load_method(results_dir, spec, test_set) for spec in METHODS}
+        # Every method must score exactly the same (video, object) pairs as the baseline.
         reference = {(r.video, r.object) for r in loaded[METHODS[0].name][0]}
         for spec in METHODS[1:]:
             if {(r.video, r.object) for r in loaded[spec.name][0]} != reference:
@@ -169,6 +234,7 @@ def build_table(results_dir: Path) -> list[dict[str, object]]:
         for spec in METHODS:
             rows, timing = loaded[spec.name]
             scores = per_video_scores(rows)
+            # Mean J&F over objects with a bootstrap interval over videos.
             interval = bootstrap_mean(scores)
             row: dict[str, object] = {
                 "method": spec.name,
@@ -187,6 +253,7 @@ def build_table(results_dir: Path) -> list[dict[str, object]]:
                 "fps": sum(timing.frames.values()) / sum(timing.compute_s.values()),
                 "hardware": "; ".join(timing.hardware),
             }
+            # Fix rows: paired change against SAM 2 alone, plus improved / worse / unchanged videos.
             if spec.alone is not None:
                 alone = per_video_scores(loaded[spec.alone][0])
                 delta = bootstrap_delta(scores, alone)
@@ -204,6 +271,7 @@ def build_table(results_dir: Path) -> list[dict[str, object]]:
 
 
 def write_csv(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the table rows to a CSV file atomically; floats are written with full precision."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -217,18 +285,26 @@ def write_csv(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def _pct(value: str) -> str:
+    """Format a fraction (as text) as a percentage with one decimal."""
     return f"{100 * float(value):.1f}"
 
 
 def _signed(value: str) -> str:
+    """Format a fraction (as text) as a signed percentage with one decimal."""
     return f"{100 * float(value):+.1f}"
 
 
 def _escape(text: str) -> str:
+    """Escape the LaTeX special characters &, _ and % in text."""
     return text.replace("&", r"\&").replace("_", r"\_").replace("%", r"\%")
 
 
 def _cells(row: dict[str, str]) -> list[str]:
+    """Build the four table cells of one row: J&F with interval, change, video counts and FPS.
+
+    Args:
+        row: A table row read back from the CSV (all values are text).
+    """
     jf = f"{_pct(row['JF'])} [{_pct(row['JF_low'])}, {_pct(row['JF_high'])}]"
     if row["delta_JF"] == "":
         delta, counts = "--", "--"
@@ -240,6 +316,11 @@ def _cells(row: dict[str, str]) -> list[str]:
 
 
 def read_table(path: Path) -> list[dict[str, str]]:
+    """Read the main table CSV back as text rows.
+
+    Raises:
+        TableError: If the file is missing or its columns are not TABLE_COLUMNS.
+    """
     with _require(path).open(newline="") as handle:
         reader = csv.DictReader(handle)
         if tuple(reader.fieldnames or ()) != TABLE_COLUMNS:
@@ -248,6 +329,15 @@ def read_table(path: Path) -> list[dict[str, str]]:
 
 
 def latex_table(rows: Sequence[dict[str, str]]) -> str:
+    """Render the table as a LaTeX tabular, one line per method with both test sets side by side.
+
+    Args:
+        rows: Rows read from the CSV.
+
+    Raises:
+        TableError: If a method has no row for a test set.
+    """
+    # Rows are looked up by (method, test set) so both test sets share one table line.
     by_key = {(r["method"], r["test_set"]): r for r in rows}
     lines = [
         r"\begin{tabular}{l" + "cccr" * len(TEST_SETS) + "l}",
@@ -264,6 +354,7 @@ def latex_table(rows: Sequence[dict[str, str]]) -> str:
         r"\midrule",
     ]
     for spec in METHODS:
+        # One line per method: the cells of each test set, then the combined hardware.
         cells: list[str] = []
         hardware: list[str] = []
         for test_set in TEST_SETS:
@@ -280,6 +371,7 @@ def latex_table(rows: Sequence[dict[str, str]]) -> str:
 
 
 def write_tex(path: Path, rows: Sequence[dict[str, str]]) -> None:
+    """Write the LaTeX table to a file atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(latex_table(rows))
@@ -287,6 +379,16 @@ def write_tex(path: Path, rows: Sequence[dict[str, str]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: build the main results table.
+
+    Reads the per-video score and timing CSVs in --results-dir and writes the table CSV
+    (--csv-out) and its LaTeX version (--tex-out), which is built from the CSV only. Nothing is
+    written if an input is missing or inconsistent (TableError is raised, so the exit status is
+    non-zero); it returns normally on success.
+
+    Args:
+        argv: Command-line arguments; sys.argv is used when None.
+    """
     parser = argparse.ArgumentParser(description="Build the main results table and its LaTeX.")
     parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--csv-out", default=DEFAULT_CSV_OUT)

@@ -53,8 +53,10 @@ def feature_matrix(
     ev: Mapping[str, FloatArray], area: FloatArray, height: FloatArray, width: FloatArray
 ) -> FloatArray:
     """One row per frame; the single code path for streaming (1 row) and batch (all rows)."""
+    # Missing evidence becomes 0 plus an indicator column, so the model can tell 'unknown' from 0.
     score, ratio, jump = ev["score"], ev["area_ratio"], ev["jump"]
     fraction, margin = ev["prev_area_fraction"], ev["prev_margin"]
+    # log / divide of NaN or empty areas is expected; those entries are replaced below.
     with np.errstate(all="ignore"):
         columns = [
             np.nan_to_num(score, nan=0.0),
@@ -73,6 +75,7 @@ def feature_matrix(
 
 def table_features(table: pd.DataFrame) -> tuple[FloatArray, npt.NDArray[np.bool_]]:
     """Features and has-history flag for a joined per-frame table (sorted, consecutive frames)."""
+    # Reuse the rule evidence, then mark each object's first frame as having no history.
     ev = batch_evidence(table)
     arrays = {c: ev[c].to_numpy(dtype=float) for c in ev.columns}
     first = table.groupby(["video", "object_id"], sort=False)["frame_index"].cumcount() == 0
@@ -86,6 +89,16 @@ def table_features(table: pd.DataFrame) -> tuple[FloatArray, npt.NDArray[np.bool
 
 
 def obs_features(ev: Evidence, obs: FrameObs) -> FloatArray:
+    """Build the feature row of a single frame for the streaming detector.
+
+    Args:
+        ev: Rule evidence for the frame (see src.detection.rules.evidence).
+        obs: The observation at the same frame.
+
+    Returns:
+        A vector with one value per name in FEATURE_NAMES, computed by the same code as the batch
+        path so streaming and batch features agree.
+    """
     arrays = {
         "score": np.array([ev.score]),
         "area_ratio": np.array([ev.area_ratio]),
@@ -104,6 +117,18 @@ def obs_features(ev: Evidence, obs: FrameObs) -> FloatArray:
 
 @dataclasses.dataclass(frozen=True)
 class LearnedModel:
+    """A fitted logistic-regression failure detector with its standardisation and threshold.
+
+    Attributes:
+        sam2_model: SAM 2 model size the detector was fitted for ("tiny" or "large").
+        mean: Per-feature mean used to standardise features.
+        std: Per-feature standard deviation used to standardise features (positive).
+        coef: Logistic-regression weight of each standardised feature.
+        intercept: Logistic-regression intercept.
+        threshold: Failure probability at or above which a frame is flagged, in (0, 1).
+        feature_names: Feature order; must equal FEATURE_NAMES.
+    """
+
     sam2_model: str
     mean: tuple[float, ...]
     std: tuple[float, ...]
@@ -113,6 +138,7 @@ class LearnedModel:
     feature_names: tuple[str, ...] = FEATURE_NAMES
 
     def __post_init__(self) -> None:
+        """Check feature names, lengths, finiteness, positive std and the threshold range."""
         n = len(self.feature_names)
         if self.feature_names != FEATURE_NAMES:
             raise ModelFileError(f"feature names differ from {FEATURE_NAMES}")
@@ -125,6 +151,14 @@ class LearnedModel:
             raise ModelFileError("threshold must be in (0, 1)")
 
     def probabilities(self, features: FloatArray) -> FloatArray:
+        """Return the failure probability of each feature row.
+
+        Args:
+            features: Array of shape (frames, len(FEATURE_NAMES)).
+
+        Returns:
+            Probabilities in [0, 1], one per row (standardise, linear score, logistic function).
+        """
         z = (features - np.array(self.mean)) / np.array(self.std)
         logit = (z * np.array(self.coef)).sum(axis=1) + self.intercept
         return np.asarray(1.0 / (1.0 + np.exp(-logit)), dtype=np.float64)
@@ -136,6 +170,7 @@ class LearnedModel:
 
 
 def model_text(model: LearnedModel) -> str:
+    """Serialise a model to a stable JSON string (sorted keys, indented, trailing newline)."""
     body = {
         "kind": "logreg",
         "sam2_model": model.sam2_model,
@@ -150,6 +185,7 @@ def model_text(model: LearnedModel) -> str:
 
 
 def sha256_of(path: Path) -> str:
+    """Return the hex SHA-256 digest of a file's bytes."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -158,11 +194,21 @@ def save_model(path: Path, model: LearnedModel) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(model_text(model))
     digest = sha256_of(path)
+    # Pin the hash so a changed model file is detected when loaded.
     path.with_suffix(".sha256").write_text(f"{digest}  {path.name}\n")
     return digest
 
 
 def load_model(path: Path, expected_sha256: str | None = None) -> LearnedModel:
+    """Read a model from its JSON file.
+
+    Args:
+        path: Model JSON file.
+        expected_sha256: If given, the file's SHA-256 must equal it.
+
+    Raises:
+        ModelFileError: If the file is missing, does not match the hash or is malformed.
+    """
     if not path.is_file():
         raise ModelFileError(f"missing model file {path}")
     if expected_sha256 is not None and sha256_of(path) != expected_sha256:
@@ -183,10 +229,16 @@ def load_model(path: Path, expected_sha256: str | None = None) -> LearnedModel:
 
 
 def model_path(sam2_model: str, directory: Path = DEFAULT_DIR) -> Path:
+    """Return the JSON file path of the logistic-regression model for a SAM 2 model size."""
     return directory / f"logreg_{sam2_model}.json"
 
 
 def pinned_hash(path: Path) -> str:
+    """Read the SHA-256 recorded next to a model file.
+
+    Raises:
+        ModelFileError: If the .sha256 file does not exist.
+    """
     pin = path.with_suffix(".sha256")
     if not pin.is_file():
         raise ModelFileError(f"no pinned hash {pin}: train the model first")
@@ -203,17 +255,25 @@ class OnlineLearnedDetector:
     """Streaming detector (Detector protocol): one previous observation per object id."""
 
     def __init__(self, model: LearnedModel) -> None:
+        """Store the model; per-object history starts empty."""
         self.model = model
         self._prev: dict[int, FrameObs] = {}
 
     @classmethod
     def from_pinned(cls, sam2_model: str, directory: Path = DEFAULT_DIR) -> OnlineLearnedDetector:
+        """Build a detector from the shipped model of a SAM 2 size, checking its pinned hash."""
         return cls(load_pinned(sam2_model, directory))
 
     def reset(self) -> None:
+        """Forget all per-object history (call before a new video)."""
         self._prev.clear()
 
     def probability(self, obj_id: int, obs: FrameObs) -> float | None:
+        """Return the failure probability of an observation given the object's previous one.
+
+        Returns:
+            The probability, or None on the object's first frame (no history).
+        """
         prev = self._prev.get(obj_id)
         if prev is None:
             return None
@@ -228,7 +288,24 @@ class OnlineLearnedDetector:
         object_score: float,
         frame_shape: tuple[int, int],
     ) -> Decision:
+        """Feed one frame of one object and return the decision for it.
+
+        Args:
+            obj_id: Object id.
+            frame_index: 0-based frame index (not used; only the previously fed frame matters).
+            mask: Boolean HxW mask of the object on this frame.
+            object_score: SAM 2's object score for this frame.
+            frame_shape: Frame (height, width) in pixels; must equal the mask shape.
+
+        Returns:
+            A flagged Decision (fired = "learned") if the probability reaches the model threshold,
+            otherwise an unflagged one; the first frame of an object never flags.
+
+        Raises:
+            ValueError: If the mask shape differs from the frame shape.
+        """
         obs = self._obs(mask, object_score, frame_shape)
+        # Score against the previous frame first, then make this frame the new previous one.
         probability = self.probability(obj_id, obs)
         self._prev[obj_id] = obs
         if probability is not None and probability >= self.model.threshold:
@@ -243,10 +320,12 @@ class OnlineLearnedDetector:
         object_score: float,
         frame_shape: tuple[int, int],
     ) -> None:
+        """Record the frame as the object's previous observation without producing a decision."""
         self._prev[obj_id] = self._obs(mask, object_score, frame_shape)
 
     @staticmethod
     def _obs(mask: Mask, object_score: float, frame_shape: tuple[int, int]) -> FrameObs:
+        """Build a FrameObs from a mask and score, checking the mask matches the frame shape."""
         if mask.shape != frame_shape:
             raise ValueError(f"mask shape {mask.shape} does not match frame shape {frame_shape}")
         return obs_from_mask(mask, object_score)

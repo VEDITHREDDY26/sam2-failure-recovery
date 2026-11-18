@@ -30,6 +30,19 @@ LOAD_ERRORS = (FileNotFoundError, ValueError, KeyError, IndexError)
 
 @dataclasses.dataclass
 class Report:
+    """Counters and problem messages collected while checking one dataset split.
+
+    Attributes:
+        dataset: "davis" or "sav".
+        split: Split name, "val" or "test".
+        videos: Number of videos found in the split.
+        objects: Total number of objects (masklets) over all videos.
+        frames: Total number of frames over all videos.
+        late_objects: Objects whose first annotated frame is not frame 0.
+        annotated_frames: Total number of annotated (object, frame) pairs.
+        problems: One message per problem found (load errors, size mismatches).
+    """
+
     dataset: str
     split: str
     videos: int = 0
@@ -41,17 +54,27 @@ class Report:
 
 
 def _frame_size(video: VideoSample) -> tuple[int, int]:
+    """Return the (height, width) of the video's first frame, reading only the image header."""
     with Image.open(video.frame_path(0)) as image:
         width, height = image.size
     return height, width
 
 
 def _check_video(video: VideoSample, report: Report, full: bool) -> None:
+    """Update the report with one video's counts and check its annotation size.
+
+    Args:
+        video: The loaded video.
+        report: Report to update in place.
+        full: If True, also read every annotated mask of every object.
+    """
+    # Annotation masks must have the same height and width as the frames.
     report.frames += video.num_frames
     report.objects += len(video.object_ids)
     size = _frame_size(video)
     for obj_id in video.object_ids:
         report.annotated_frames += len(video.annotated_frames(obj_id))
+        # The first box also proves the object is visible in at least one annotated frame.
         first = video.first_box(obj_id)
         if first.frame_index > 0:
             report.late_objects += 1
@@ -65,6 +88,15 @@ def _check_video(video: VideoSample, report: Report, full: bool) -> None:
 
 
 def _read_all(video: VideoSample, obj_id: int, size: tuple[int, int], report: Report) -> None:
+    """Read every annotated mask of one object and record the first size mismatch.
+
+    Args:
+        video: The loaded video.
+        obj_id: Object id to check.
+        size: Expected mask shape (height, width) in pixels, taken from the first frame.
+        report: Report to add a problem to; stops after the first problem for this object.
+    """
+    # Only annotated frames can be read; stop at the first bad one to keep the output short.
     for frame_index in video.annotated_frames(obj_id):
         mask = video.gt_mask(obj_id, frame_index)
         if mask is None or mask.shape != size:
@@ -75,6 +107,15 @@ def _read_all(video: VideoSample, obj_id: int, size: tuple[int, int], report: Re
 
 
 def check_davis(cfg: DataConfig, full: bool) -> Report:
+    """Check every video of the configured DAVIS split.
+
+    Args:
+        cfg: Data configuration.
+        full: If True, read every ground-truth mask.
+
+    Returns:
+        The filled report; load errors are recorded as problems instead of raised.
+    """
     report = Report("davis", cfg.davis.split)
     names = list_davis_videos(cfg)
     report.videos = len(names)
@@ -87,6 +128,16 @@ def check_davis(cfg: DataConfig, full: bool) -> Report:
 
 
 def check_sav(cfg: DataConfig, split: str, full: bool) -> Report:
+    """Check every video of an SA-V split.
+
+    Args:
+        cfg: Data configuration.
+        split: "val" or "test".
+        full: If True, read every annotated mask.
+
+    Returns:
+        The filled report; load errors are recorded as problems instead of raised.
+    """
     report = Report("sav", split)
     names = list_sav_videos(cfg, split)
     report.videos = len(names)
@@ -99,10 +150,17 @@ def check_sav(cfg: DataConfig, split: str, full: bool) -> Report:
 
 
 def _print_report(report: Report, expected: int) -> None:
+    """Print the report as plain text, with warnings for unexpected counts.
+
+    Args:
+        report: The finished report.
+        expected: Number of videos the split should contain.
+    """
     print(f"dataset: {report.dataset}")
     print(f"split: {report.split}")
     print(f"videos: {report.videos} (expected {expected})")
     print(f"objects: {report.objects}")
+    # Only SA-V has a published object count to compare against.
     masklets = EXPECTED_MASKLETS.get((report.dataset, report.split))
     if masklets is not None and report.objects != masklets:
         print(f"WARN: expected {masklets} masklets, found {report.objects}")
@@ -118,6 +176,7 @@ def _print_report(report: Report, expected: int) -> None:
 
 
 def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Parse the command-line arguments of the dataset check."""
     parser = argparse.ArgumentParser(prog="python -m src.data.check")
     parser.add_argument("--dataset", choices=["davis", "sav"], required=True)
     parser.add_argument("--split", choices=["val", "test"], required=True)
@@ -128,8 +187,21 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Command-line entry point: check a dataset split and print a summary.
+
+    Reads the data configuration (--config) and the dataset it points to, and prints counts and
+    problems to standard output; nothing is written.
+
+    Args:
+        argv: Command-line arguments; sys.argv is used when None.
+
+    Returns:
+        0 if the video count equals the expected count and no problems were found, otherwise 1
+        (also 1 if the requested DAVIS split differs from the configured one).
+    """
     args = _parse(argv)
     cfg: DataConfig = load_config(args.config)
+    # Fall back to the known video count of the split unless one is given.
     expected = args.expected_videos or EXPECTED_VIDEOS.get((args.dataset, args.split), 0)
     if args.dataset == "sav":
         report = check_sav(cfg, args.split, args.full)
