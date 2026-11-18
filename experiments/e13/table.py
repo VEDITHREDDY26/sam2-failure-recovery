@@ -81,6 +81,16 @@ class E13TableError(ValueError):
 
 @dataclass(frozen=True)
 class Variant:
+    """One run of the ladder that is compared with SAM 2 alone.
+
+    Attributes:
+        method: Method name of the run (names its result files).
+        label: Text shown for the run in the table and figure.
+        role: "e2", "variant_a", "variant_b" or "oracle".
+        oracle: True for the oracle-box reference run.
+        needs_reprompts: True if the run's _reprompts file must exist.
+    """
+
     method: str
     label: str
     role: str
@@ -101,12 +111,26 @@ def variants(model: str, arm: str) -> list[Variant]:
 
 
 def _keys(rows: Sequence[ScoreRow]) -> set[tuple[str, int]]:
+    """Return the set of (video, object) pairs that a list of score rows covers."""
     return {(r.video, r.object) for r in rows}
 
 
 def _empty_row(
     model: str, split: str, method: str, label: str, role: str, oracle: bool
 ) -> dict[str, object]:
+    """Start a table row with the identifying fields set and every other column empty.
+
+    Args:
+        model: "tiny" or "large".
+        split: Test set name.
+        method: Method name of the run.
+        label: Display label.
+        role: Role of the run in the ladder.
+        oracle: True for the oracle reference.
+
+    Returns:
+        A dictionary with every TABLE_COLUMNS key.
+    """
     row: dict[str, object] = {c: "" for c in TABLE_COLUMNS}
     return row | {
         "model": model,
@@ -119,6 +143,19 @@ def _empty_row(
 
 
 def _scores_and_fps(results: Path, method: str, split: str) -> tuple[list[ScoreRow], float]:
+    """Load a run's per-object scores and compute its speed.
+
+    Args:
+        results: Folder of result CSVs.
+        method: Method name of the run.
+        split: Test set name.
+
+    Returns:
+        The score rows and the frames per second (total frames over total compute seconds).
+
+    Raises:
+        E13TableError: If the scored videos differ from the timed videos.
+    """
     rows = load_scores(results / f"{method}_{split}.csv")
     timing = load_timing(results / f"{method}_timing_{split}.csv")
     if {r.video for r in rows} != set(timing.frames):
@@ -127,6 +164,15 @@ def _scores_and_fps(results: Path, method: str, split: str) -> tuple[list[ScoreR
 
 
 def _fill_scores(row: dict[str, object], rows: Sequence[ScoreRow], fps: float) -> None:
+    """Fill the J&F columns, video and object counts and FPS of a row (in place).
+
+    The J&F value is the mean over videos with its 95% bootstrap interval.
+
+    Args:
+        row: Table row to update.
+        rows: Score rows of the run.
+        fps: Frames per second of the run.
+    """
     per_video = per_video_scores(rows)
     interval = bootstrap_mean(per_video)
     row |= {
@@ -145,8 +191,18 @@ def _fill_changes(
     alone: Sequence[ScoreRow],
     e2: Sequence[ScoreRow] | None,
 ) -> None:
+    """Fill the change-in-J&F columns and the improved / worse / unchanged counts (in place).
+
+    Args:
+        row: Table row to update.
+        rows: Score rows of the run.
+        alone: Score rows of SAM 2 alone, the paired reference.
+        e2: Score rows of the E2 run for the comparison against E2, or None to leave those
+            columns empty.
+    """
     new, base = per_video_scores(rows), per_video_scores(alone)
     delta = bootstrap_delta(new, base)
+    # Videos are counted with the main-table rule; worse videos are kept.
     improved, worse, unchanged = count_changes(base, new)
     row |= {
         "delta_JF": delta.estimate,
@@ -156,6 +212,7 @@ def _fill_changes(
         "videos_worse": worse,
         "videos_unchanged": unchanged,
     }
+    # The change against E2 is paired on the same objects.
     if e2 is not None:
         vs = bootstrap_delta(new, per_video_scores(e2))
         row |= {
@@ -166,6 +223,12 @@ def _fill_changes(
 
 
 def _fill_events(row: dict[str, object], events: pd.DataFrame) -> None:
+    """Fill the re-prompt and gated counts of a row (in place) from the run's events.
+
+    Args:
+        row: Table row to update.
+        events: Event table of the run.
+    """
     actions, reasons = events["action"], events["reason"]
     gated = actions == "gated"
     row |= {
@@ -177,8 +240,19 @@ def _fill_events(row: dict[str, object], events: pd.DataFrame) -> None:
 
 
 def _fill_wrong(row: dict[str, object], reprompts: pd.DataFrame, events: pd.DataFrame) -> None:
+    """Fill the wrong re-prompt columns of a row (in place) from the re-prompts file.
+
+    Args:
+        row: Table row to update.
+        reprompts: Re-prompt table with the "wrong" flag and the annotated frame index.
+        events: Event table of the same run.
+
+    Raises:
+        E13TableError: If the re-prompt file and the events file disagree on the count.
+    """
     if len(reprompts) != int((events["action"] == "reprompted").sum()):
         raise E13TableError(f"{row['method']}/{row['split']}: re-prompt file and events disagree")
+    # Exact re-prompts are those whose own frame is annotated.
     exact = reprompts["gt_frame_index"] == reprompts["frame_index"]
     row |= {
         "wrong_reprompts": int((reprompts["wrong"] == True).sum()),  # noqa: E712
@@ -189,25 +263,45 @@ def _fill_wrong(row: dict[str, object], reprompts: pd.DataFrame, events: pd.Data
 
 
 def split_rows(results: Path, model: str, arm: str, split: str) -> list[dict[str, object]]:
+    """Build the table rows of one model and test set: SAM 2 alone, then each ladder run.
+
+    Args:
+        results: Folder of result CSVs.
+        model: "tiny" or "large".
+        arm: Chosen box-source arm of the model.
+        split: Test set name.
+
+    Returns:
+        The rows in table order.
+
+    Raises:
+        E13TableError: If a run scores different objects than SAM 2 alone or a file is
+            inconsistent.
+    """
+    # SAM 2 alone is the first row and the paired reference for all changes.
     alone_rows, alone_fps = _scores_and_fps(results, alone_method(model), split)
     base = _empty_row(model, split, alone_method(model), "SAM 2 alone", "alone", False)
     _fill_scores(base, alone_rows, alone_fps)
     base["delta_JF"] = 0.0
     out = [base]
     e2_rows: list[ScoreRow] | None = None
+    # Each ladder run must score the same objects as SAM 2 alone, so the deltas are paired.
     for v in variants(model, arm):
         label = f"{model}/{split}/{v.method}"
         rows, fps = _scores_and_fps(results, v.method, split)
         if _keys(rows) != _keys(alone_rows):
             raise E13TableError(f"{label}: scores a different set of objects than SAM 2 alone")
+        # Counts of re-prompts and gated boxes come from the events file.
         events = load_events(results / f"events_{v.method}_{split}.csv")
         row = _empty_row(model, split, v.method, v.label, v.role, v.oracle)
         _fill_scores(row, rows, fps)
         _fill_changes(row, rows, alone_rows, None if v.role == "e2" else e2_rows)
         _fill_events(row, events)
+        # Runs whose re-prompts file is optional (E2 Large, oracle) are filled only if it exists.
         path = results / f"{v.method}_{split}_reprompts.csv"
         if v.needs_reprompts or path.is_file():
             _fill_wrong(row, load_reprompts(path), events)
+        # Later variants are compared with the E2 row as well.
         e2_rows = rows if v.role == "e2" else e2_rows
         out.append(row)
     return out
@@ -216,6 +310,16 @@ def split_rows(results: Path, model: str, arm: str, split: str) -> list[dict[str
 def build_rows(
     results: Path, choice: Path, splits: Sequence[str] = TEST_SETS
 ) -> list[dict[str, object]]:
+    """Build the whole table for every model with a go in the choice file.
+
+    Args:
+        results: Folder of result CSVs.
+        choice: Path to the choice CSV.
+        splits: Test sets to include.
+
+    Returns:
+        All table rows.
+    """
     arms = dict(make_configs.go_choices(choice))
     table: list[dict[str, object]] = []
     for model, arm in arms.items():
@@ -225,6 +329,12 @@ def build_rows(
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the table as CSV through a temporary file.
+
+    Args:
+        path: Output file; its folder is created if needed.
+        table: Rows to write; floats are written with repr so no precision is lost.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
@@ -238,20 +348,42 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def _signed(value: str) -> str:
+    """Format a fraction as a signed percentage-point number with one decimal."""
     return f"{100 * float(value):+.1f}"
 
 
 def _interval(row: dict[str, str], key: str, low: str, high: str) -> str:
+    """Format a change with its bootstrap interval, or "--" if it is empty.
+
+    Args:
+        row: Table row of strings.
+        key: Column with the estimate.
+        low: Column with the lower bound.
+        high: Column with the upper bound.
+
+    Returns:
+        Text like "+1.2 [-0.3, +2.5]".
+    """
     if row[low] == "":
         return "--"
     return f"{_signed(row[key])} [{_signed(row[low])}, {_signed(row[high])}]"
 
 
 def _escape(text: str) -> str:
+    """Escape the characters that LaTeX treats specially in a label."""
     return text.replace("&", r"\&").replace("_", r"\_").replace("%", r"\%")
 
 
 def _cells(row: dict[str, str]) -> list[str]:
+    """Build the cells of one table row for one test set.
+
+    Args:
+        row: Table row of strings.
+
+    Returns:
+        Change in J&F with interval, better / worse / same counts, re-prompts (wrong),
+        re-prompts at annotated frames (wrong) and FPS, as text.
+    """
     counts = "--"
     if row["videos_improved"] != "":
         counts = f"{row['videos_improved']} / {row['videos_worse']} / {row['videos_unchanged']}"
@@ -267,6 +399,18 @@ def _cells(row: dict[str, str]) -> list[str]:
 
 
 def latex_table(rows: Sequence[dict[str, str]]) -> str:
+    """Render the table as a LaTeX tabular with one column group per test set.
+
+    Args:
+        rows: Table rows as read back from the CSV.
+
+    Returns:
+        The LaTeX text.
+
+    Raises:
+        E13TableError: If a run has no row for one of the test sets.
+    """
+    # One table row per (model, method); one column group per test set.
     keys = list(dict.fromkeys((r["model"], r["method"]) for r in rows))
     by_key = {(r["model"], r["method"], r["split"]): r for r in rows}
     splits = [s for s in TEST_SETS if any(r["split"] == s for r in rows)]
@@ -289,6 +433,7 @@ def latex_table(rows: Sequence[dict[str, str]]) -> str:
         + r" \\",
         r"\midrule",
     ]
+    # Collect the cells of every test set, failing if one is missing.
     for model, method in keys:
         cells: list[str] = []
         for split in splits:
@@ -303,6 +448,17 @@ def latex_table(rows: Sequence[dict[str, str]]) -> str:
 
 
 def read_table(path: Path) -> list[dict[str, str]]:
+    """Read the table CSV, checking its columns.
+
+    Args:
+        path: Path to the table CSV.
+
+    Returns:
+        The rows as dictionaries of strings.
+
+    Raises:
+        E13TableError: If the header does not match TABLE_COLUMNS.
+    """
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
         if tuple(reader.fieldnames or ()) != TABLE_COLUMNS:
@@ -311,6 +467,17 @@ def read_table(path: Path) -> list[dict[str, str]]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Build the E13 table and its LaTeX version (command line).
+
+    Reads the result CSVs in --results-dir and the choice file. Writes --out and --tex-out only
+    if every input exists and is consistent.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 on success, 1 (after printing why) if an input is missing or inconsistent.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--choice", type=Path, default=make_configs.CHOICE_PATH)
@@ -322,6 +489,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ValueError, FileNotFoundError) as error:
         sys.stdout.write(f"refused, nothing written: {error}\n")
         return 1
+    # Write the CSV first, then derive the LaTeX from the file as written.
     write_table(args.out, table)
     args.tex_out.parent.mkdir(parents=True, exist_ok=True)
     args.tex_out.write_text(latex_table(read_table(args.out)))

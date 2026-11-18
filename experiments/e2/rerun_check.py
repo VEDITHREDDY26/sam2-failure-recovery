@@ -47,6 +47,16 @@ DEFAULT_OUT = "results/e2_rerun_check.csv"
 
 @dataclass(frozen=True)
 class VideoAgreement:
+    """How closely the rerun of one video matches the E2 run.
+
+    Attributes:
+        video: Video name.
+        jf_e2: Mean J&F over the video's objects in the E2 run.
+        jf_rerun: Mean J&F over the video's objects in the rerun.
+        reprompts_e2: Number of re-prompts in the E2 run.
+        reprompts_rerun: Number of re-prompts in the rerun.
+    """
+
     video: str
     jf_e2: float
     jf_rerun: float
@@ -55,16 +65,19 @@ class VideoAgreement:
 
     @property
     def abs_delta(self) -> float:
+        """Absolute difference in J&F between the two runs."""
         return abs(self.jf_e2 - self.jf_rerun)
 
     @property
     def within(self) -> bool:
+        """True if the J&F difference is within tolerance and the re-prompt counts are equal."""
         return (
             self.abs_delta <= PER_VIDEO_TOLERANCE + ROUNDING
             and self.reprompts_e2 == self.reprompts_rerun
         )
 
     def as_row(self) -> list[object]:
+        """Return the values as a row of the check CSV in CHECK_COLUMNS order."""
         return [
             self.video,
             repr(self.jf_e2),
@@ -77,6 +90,14 @@ class VideoAgreement:
 
 
 def reprompt_counts(events: pd.DataFrame) -> dict[str, int]:
+    """Count the re-prompts of each video.
+
+    Args:
+        events: Events table with "video" and "action" columns.
+
+    Returns:
+        Mapping from video name to number of "reprompted" events; videos without any are absent.
+    """
     return {
         str(v): int(n)
         for v, n in events[events["action"] == "reprompted"].groupby("video").size().items()
@@ -84,11 +105,25 @@ def reprompt_counts(events: pd.DataFrame) -> dict[str, int]:
 
 
 def compare(results_dir: Path, videos: Sequence[str] = SEEDED_VIDEOS) -> list[VideoAgreement]:
+    """Compare the E2 run with the rerun on the seeded videos.
+
+    Args:
+        results_dir: Folder with the score and events CSVs of both runs.
+        videos: Videos to compare.
+
+    Returns:
+        One agreement record per video.
+
+    Raises:
+        E2Error: If a video is missing from either run or an input file is missing or invalid.
+    """
+    # Per-video J&F of both runs; videos missing from either cannot be compared.
     e2 = per_video_jf(load_scores(results_dir / f"{E2_NAME}.csv"))
     rerun = per_video_jf(load_scores(results_dir / f"{RERUN_NAME}.csv"))
     missing = [v for v in videos if v not in e2 or v not in rerun]
     if missing:
         raise E2Error(f"videos missing from the E2 run or the rerun: {missing}")
+    # Re-prompt counts must match exactly, which shows the run repeated the same decisions.
     count_e2 = reprompt_counts(load_events(results_dir / f"events_{E2_NAME}.csv"))
     count_rerun = reprompt_counts(load_events(results_dir / f"events_{RERUN_NAME}.csv"))
     return [
@@ -98,16 +133,25 @@ def compare(results_dir: Path, videos: Sequence[str] = SEEDED_VIDEOS) -> list[Vi
 
 
 def mean_abs_delta(rows: Sequence[VideoAgreement]) -> float:
+    """Average the absolute J&F differences over the videos."""
     return sum(r.abs_delta for r in rows) / len(rows)
 
 
 def passes(rows: Sequence[VideoAgreement]) -> bool:
+    """True if every video is within tolerance and the mean difference is within tolerance."""
     return all(r.within for r in rows) and mean_abs_delta(rows) <= MEAN_TOLERANCE + ROUNDING
 
 
 def write_check(path: Path, rows: Sequence[VideoAgreement]) -> None:
+    """Write the check table as CSV through a temporary file.
+
+    Args:
+        path: Output file; its folder is created if needed.
+        rows: Agreement records to write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
+    # Write to a temporary file, then rename, so the file is never half written.
     with temp.open("w", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(CHECK_COLUMNS)
@@ -116,12 +160,34 @@ def write_check(path: Path, rows: Sequence[VideoAgreement]) -> None:
 
 
 def summary_line(rows: Sequence[VideoAgreement]) -> str:
+    """Build the one-line verdict printed after the check.
+
+    Args:
+        rows: Agreement records.
+
+    Returns:
+        Text with the video count, the mean absolute J&F difference and the verdict.
+    """
     outside = [r.video for r in rows if not r.within]
     verdict = "within tolerance" if passes(rows) else f"OUTSIDE tolerance ({outside or 'mean'})"
     return f"{len(rows)} videos, mean |delta J&F| {mean_abs_delta(rows):.5f}: {verdict}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the rerun check (command line).
+
+    Reads the E2 and rerun score and events CSVs in --results-dir, writes --out and prints a
+    summary line.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 if the rerun is within tolerance, 1 otherwise.
+
+    Raises:
+        E2Error: If an input is missing or lacks one of the seeded videos.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--out", default=DEFAULT_OUT)

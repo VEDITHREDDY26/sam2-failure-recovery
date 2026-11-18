@@ -37,10 +37,27 @@ UNGATED_MODELS = ("tiny",)
 
 
 def gate_file_name(model: str) -> str:
+    """Name of the gate config file for one model size.
+
+    Args:
+        model: "tiny" or "large".
+
+    Returns:
+        File name such as box_gate_tiny.yaml.
+    """
     return f"box_gate_{model}.yaml"
 
 
 def gated_method(arm: str, model: str) -> str:
+    """Method name of the gated run for an arm and model.
+
+    Args:
+        arm: Box-source arm name, one of ARMS.
+        model: "tiny" or "large".
+
+    Returns:
+        The name used for the run's results, e.g. fix_gated_rules_<arm>_<model>.
+    """
     return f"fix_gated_rules_{arm}_{model}"
 
 
@@ -51,14 +68,34 @@ def ungated_method(arm: str, model: str) -> str:
 
 
 def has_own_ungated_config(arm: str) -> bool:
+    """Tell whether the ungated run of an arm needs a new config.
+
+    Args:
+        arm: Box-source arm name.
+
+    Returns:
+        False for the CSRT arms whose ungated run already exists (E2 and E8), True otherwise.
+    """
     return arm not in EXISTING_UNGATED
 
 
 def config_text(method: str, arm: str, gate_config: str | None) -> str:
+    """Render the text of one run config file.
+
+    Args:
+        method: Method name written into the config.
+        arm: Box-source arm name; "csrt_*" arms use the CSRT source, other arms name the source.
+        gate_config: Repo-relative path of the gate file, or None for an ungated run.
+
+    Returns:
+        YAML text ending with a newline. Only the continuous CSRT arm sets a tracker mode.
+    """
+    # CSRT arms share one box source; the tracker mode is only set for the continuous arm.
     csrt = arm.startswith("csrt_")
     source = "csrt" if csrt else arm
     mode = arm.removeprefix("csrt_") if arm == "csrt_continuous" else ""
     kind = "recovery_run" if gate_config is None else "gated_recovery_run"
+    # Config keys in file order; the gate key is added only for gated runs.
     lines = [
         f"kind: {kind}",
         f"method: {method}",
@@ -84,6 +121,17 @@ def planned_configs(model: str, arm: str) -> dict[str, str]:
 
 
 def read_choice(path: Path) -> pd.DataFrame:
+    """Load the choice table written by the choose step.
+
+    Args:
+        path: Path to results/e13_choice.csv.
+
+    Returns:
+        The table with the "go" column converted to booleans.
+
+    Raises:
+        SystemExit: If the file is missing or lacks one of the needed columns.
+    """
     if not path.is_file():
         raise SystemExit(f"{path} is missing: run experiments.e13.choose first")
     table = pd.read_csv(path)
@@ -107,7 +155,20 @@ def go_choices(path: Path) -> list[tuple[str, str]]:
 
 
 def plan(choice: Path, config_dir: Path) -> dict[Path, str]:
+    """Work out every config file to write for the models whose choice is a go.
+
+    Args:
+        choice: Path to the choice CSV.
+        config_dir: Folder that holds the recovery configs and the gate files.
+
+    Returns:
+        Mapping from config path to the text to write.
+
+    Raises:
+        SystemExit: If no model is a go, an arm is unknown, or a gate file is missing.
+    """
     files: dict[Path, str] = {}
+    # Gate files must already exist (written by the choose step) before configs are planned.
     for model, arm in go_choices(choice):
         gate = config_dir / gate_file_name(model)
         if not gate.is_file():
@@ -131,12 +192,36 @@ def run_list(choice: Path, config_dir: Path) -> list[tuple[str, str, Path, str]]
 
 
 def check_no_conflict(files: dict[Path, str]) -> None:
+    """Refuse to overwrite an existing config whose content would change.
+
+    Args:
+        files: Mapping from config path to the text that would be written.
+
+    Raises:
+        SystemExit: If a file exists with different content.
+    """
     for path, text in files.items():
         if path.is_file() and path.read_text() != text:
             raise SystemExit(f"refusing to overwrite {path}: it exists with different content")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Write (or list) the E13 run configs for the chosen box source (command line).
+
+    Reads the choice CSV and the gate files in --config-dir. Without --list it writes the new
+    config files and prints one line per file written. With --list it writes nothing and prints
+    one line per run.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 on success.
+
+    Raises:
+        SystemExit: If an input is missing, no model is a go, or a config would be overwritten
+            with different content.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--choice", type=Path, default=CHOICE_PATH)
     parser.add_argument("--config-dir", type=Path, default=CONFIG_DIR)
@@ -147,10 +232,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         for model, variant, path, state in run_list(args.choice, args.config_dir):
             sys.stdout.write(f"{model} {variant} {path} {state}\n")
         return 0
+    # Write nothing unless every target is new or already identical.
     check_no_conflict(files)
     for path, text in files.items():
         path.write_text(text)
         sys.stdout.write(f"wrote {path}\n")
+    # Tell the reader which existing run stands for variant (a) of a CSRT arm.
     for model, arm in go_choices(args.choice):
         if model in UNGATED_MODELS and not has_own_ungated_config(arm):
             existing = args.config_dir / EXISTING_UNGATED[arm].format(model=model)

@@ -31,6 +31,17 @@ GAP = 0.8
 
 
 def read_table(path: Path) -> list[dict[str, str]]:
+    """Read the E13 table CSV, checking that its columns are exactly TABLE_COLUMNS.
+
+    Args:
+        path: Path to results/e13.csv.
+
+    Returns:
+        The rows as dictionaries of strings keyed by column name.
+
+    Raises:
+        ValueError: If the header does not match TABLE_COLUMNS.
+    """
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
         if tuple(reader.fieldnames or ()) != TABLE_COLUMNS:
@@ -57,17 +68,39 @@ def panel_bars(rows: list[dict[str, str]], split: str) -> list[tuple[float, dict
 
 
 def tick_label(row: dict[str, str]) -> str:
+    """Build the multi-line x-axis label of one bar from its table row.
+
+    Args:
+        row: One row of the E13 table (needs the "model" and "label" fields).
+
+    Returns:
+        The model name followed by the row label broken over several lines.
+    """
     text = row["label"].removeprefix("rules + ").replace(" + ", "\n+ ").replace("_", "\n")
     text = text.replace(" (", "\n(")
     return f"{row['model']}\n{text}"
 
 
 def plot_ladder(table_path: Path, figure_dir: Path) -> Path:
+    """Draw the ladder figure (change in J&F against SAM 2 alone) and save it as a PNG.
+
+    Args:
+        table_path: Path to results/e13.csv.
+        figure_dir: Folder to save the figure in; it is created if needed.
+
+    Returns:
+        The path of the saved figure.
+
+    Raises:
+        ValueError: If the table has the wrong columns.
+    """
+    # One panel per test set that has rows in the table.
     rows = read_table(table_path)
     splits = [s for s in SET_TITLES if any(r["split"] == s for r in rows)]
     fig, axes = plt.subplots(1, len(splits), figsize=FIGURE_SIZE, dpi=DPI, squeeze=False)
     for ax, split in zip(axes[0], splits, strict=True):
         bars = panel_bars(rows, split)
+        # Bars are in percentage points: the table stores J&F on a 0 to 1 scale.
         for x, row in bars:
             delta = 100 * float(row["delta_JF"])
             low, high = 100 * float(row["delta_low"]), 100 * float(row["delta_high"])
@@ -82,6 +115,7 @@ def plot_ladder(table_path: Path, figure_dir: Path) -> Path:
                 yerr=[[delta - low], [high - delta]],
                 capsize=3,
             )
+        # Zero line: bars above it improve on SAM 2 alone, bars below it are worse.
         ax.axhline(0.0, color="black", linewidth=0.8)
         ax.set_xticks(
             [x for x, _ in bars],
@@ -90,6 +124,7 @@ def plot_ladder(table_path: Path, figure_dir: Path) -> Path:
         )
         ax.set_title(SET_TITLES[split])
         ax.set_ylabel("change in J&F vs SAM 2 alone (points)")
+    # Save the figure and release it so repeated calls do not pile up figures.
     fig.tight_layout()
     figure_dir.mkdir(parents=True, exist_ok=True)
     path = figure_dir / FIGURE_NAME
@@ -99,6 +134,16 @@ def plot_ladder(table_path: Path, figure_dir: Path) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Build the E13 ladder figure from the E13 table (command line).
+
+    Reads --table (default results/e13.csv) and writes figures/e13_ladder.png in --figure-dir.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 on success, 1 if the table file is missing.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--table", type=Path, default=Path("results/e13.csv"))
     parser.add_argument("--figure-dir", type=Path, default=Path("figures"))

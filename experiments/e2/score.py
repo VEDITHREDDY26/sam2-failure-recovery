@@ -69,6 +69,19 @@ LABEL_KEY = ["video", "object_id", "frame_index"]
 
 
 def output_names(method: str, split: str) -> dict[str, str]:
+    """Build the result file names of a run and refuse names reserved for other runs.
+
+    Args:
+        method: Method name of the run.
+        split: Split name.
+
+    Returns:
+        File names for "scores", "timing", "frames" and "events".
+
+    Raises:
+        ValueError: If a name starts with "sam2_" or "baseline", which would overwrite the SAM 2
+            alone or baseline results.
+    """
     names = {
         "scores": f"{method}_{split}.csv",
         "timing": f"{method}_timing_{split}.csv",
@@ -91,6 +104,7 @@ def check_method_run(cfg: DataConfig, method: str, split: str, videos: Sequence[
     gt_root, sav = _gt_root_and_kind(cfg, split)
     pred_root = run_dir(output_root, method, split) / "masks"
     result = RunCheck(method, split, len(videos))
+    # Every video needs prompts, frames, a finished online run and a passing scorer check.
     for video in videos:
         if prompted is None or video not in prompted:
             result.missing[video] = "no prompts for this video"
@@ -112,13 +126,16 @@ def check_method_run(cfg: DataConfig, method: str, split: str, videos: Sequence[
 
 def frame_counts(alone: pd.DataFrame, fix: pd.DataFrame) -> pd.DataFrame:
     """Per (video, object): failures of both runs on the same labelled frames, recovered, broken."""
+    # Align both runs on (video, object, frame); an unmatched frame is an error.
     merged = alone.merge(
         fix, on=LABEL_KEY, how="outer", suffixes=("_alone", "_fix"), indicator=True
     )
     if (merged["_merge"] != "both").any():
         raise ValueError("SAM 2 alone and the fix are not labelled on the same frames")
+    # Recovered: SAM 2 alone failed and the fix did not. Broken: the reverse.
     merged["recovered"] = merged["failure_alone"] & ~merged["failure_fix"]
     merged["broken"] = ~merged["failure_alone"] & merged["failure_fix"]
+    # Sum the per-frame flags into one row per object.
     grouped = merged.groupby(["video", "object_id"], sort=True)
     counts = grouped.agg(
         labelled_frames=("failure_alone", "size"),
@@ -133,6 +150,21 @@ def frame_counts(alone: pd.DataFrame, fix: pd.DataFrame) -> pd.DataFrame:
 def run_frame_counts(
     cfg: DataConfig, model: str, method: str, split: str, videos: Sequence[str]
 ) -> pd.DataFrame:
+    """Count failure frames of SAM 2 alone and of the run on the same labelled frames.
+
+    Args:
+        cfg: Data config.
+        model: SAM 2 model size, "tiny" or "large".
+        method: Method name of the run.
+        split: Split name.
+        videos: Videos to count over.
+
+    Returns:
+        The per-object table from frame_counts.
+
+    Raises:
+        ValueError: If SAM 2 alone and the run are not labelled on the same frames.
+    """
     output_root = cfg.data_root / cfg.output_root
     alone, fix = [], []
     for name in videos:
@@ -145,6 +177,20 @@ def run_frame_counts(
 def collect_timing(
     output_root: Path, method: str, split: str, videos: Sequence[str]
 ) -> pd.DataFrame:
+    """Read and stack the per-video timing files of a run.
+
+    Args:
+        output_root: Root folder that holds all run outputs.
+        method: Method name of the run.
+        split: Split name.
+        videos: Videos to read.
+
+    Returns:
+        One row per video.
+
+    Raises:
+        ScoringError: If a timing file has the wrong columns or not exactly one row.
+    """
     tables = []
     for video in videos:
         table = pd.read_csv(timing_path(output_root, method, split, video), dtype={"video": str})
@@ -157,6 +203,20 @@ def collect_timing(
 def collect_events(
     output_root: Path, method: str, split: str, videos: Sequence[str]
 ) -> pd.DataFrame:
+    """Read and stack the per-video event files of a run.
+
+    Args:
+        output_root: Root folder that holds all run outputs.
+        method: Method name of the run.
+        split: Split name.
+        videos: Videos to read.
+
+    Returns:
+        All events (an empty table with the event columns if there are no videos).
+
+    Raises:
+        ScoringError: If an events file has the wrong columns.
+    """
     tables = []
     for video in videos:
         table = pd.read_csv(events_path(output_root, method, split, video), dtype={"video": str})
@@ -177,6 +237,7 @@ def score_split(
     """Score one split of the run; False (after saying why) if it is refused."""
     names = output_names(run_method, split)
     cfg = load_data_config()
+    # Optionally narrow to the videos named on the command line.
     videos = split_videos(cfg, split, subset_file)
     if only:
         unknown = [v for v in only if v not in videos]
@@ -184,13 +245,16 @@ def score_split(
             raise SystemExit(f"{split}: videos not in the split: {unknown}")
         videos = list(only)
     label = f"{run_method}/{split}"
+    # Refuse to score a split whose run is incomplete, and say why.
     check = check_method_run(cfg, run_method, split, videos)
     if check.missing:
         sys.stdout.write("\n".join(check.lines()) + f"\n{label}: refused, run is not complete\n")
         return False
     output_root = cfg.data_root / cfg.output_root
     pred_root = run_dir(output_root, run_method, split) / "masks"
+    # DAVIS val uses the DAVIS scorer; the SA-V test subset uses the SA-V scorer.
     dataset = "davis" if split == "davis_val" else "sav"
+    # Gather scores and side tables first so nothing is written if one of them fails.
     try:
         rows = score(cfg, dataset, split, pred_root, videos)
         timing = collect_timing(output_root, run_method, split, videos)
@@ -199,11 +263,13 @@ def score_split(
     except (ScoringError, FileNotFoundError, ValueError) as error:
         sys.stdout.write(f"{label}: refused, {error}\n")
         return False
+    # All four tables are written only after every input was read successfully.
     results_dir.mkdir(parents=True, exist_ok=True)
     write_scores_csv(results_dir / names["scores"], rows)
     timing.to_csv(results_dir / names["timing"], index=False)
     frames.to_csv(results_dir / names["frames"], index=False)
     events.to_csv(results_dir / names["events"], index=False)
+    # Print a one-line summary of the scored split.
     reprompts = int((events["action"] == "reprompted").sum())
     gated = int((events["action"] == "gated").sum())
     sys.stdout.write(
@@ -216,6 +282,21 @@ def score_split(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Score a finished real-system run on the requested splits (command line).
+
+    Reads the run config, the run's outputs and the ground truth under the data root (environment
+    variable). Writes the score, timing, frames and events CSVs for each complete split into
+    --results-dir and prints one summary line per split.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Returns:
+        0 if every split was scored, 1 if any split was refused.
+
+    Raises:
+        SystemExit: If the config is an oracle or non-rules run.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--splits", nargs="+", choices=E2_SPLITS, default=list(E2_SPLITS))
@@ -225,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
+    # Refuse oracle configs: scoring is for the real system only.
     run_cfg = load_recovery_config(args.config)
     if run_cfg.detector != "rules" or run_cfg.box_source == "oracle":
         raise SystemExit(
@@ -233,6 +315,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     method = check_online_method(run_cfg.method)
     model = model_of(run_cfg)
     refused = 0
+    # Score each split; a refused split makes the exit code 1 but the others still run.
     for split in args.splits:
         ok = score_split(method, model, split, args.results_dir, args.subset_file, args.videos)
         refused += not ok
