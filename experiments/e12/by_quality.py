@@ -55,6 +55,16 @@ class E12Error(ValueError):
 
 @dataclass(frozen=True)
 class Method:
+    """One method to compare against SAM 2 alone.
+
+    Attributes:
+        model: SAM 2 size, "tiny" or "large"; picks the SAM 2 alone scores to compare with.
+        name: Method name; the per-object scores are in results/<name>_<test_set>.csv.
+        oracle: True when the method uses ground truth (marked as oracle in the output).
+        table: Committed table (e2, e5, e7 or e8) whose delta the all row must reproduce.
+        optional: When True, a missing score file skips the method instead of failing.
+    """
+
     model: str
     name: str
     oracle: bool
@@ -74,6 +84,14 @@ METHODS = (
 
 
 def quality_bin(jf_alone: float) -> str:
+    """Name the quality bin of an object from its SAM 2 alone J&F.
+
+    Args:
+        jf_alone: J&F of SAM 2 alone for the object, in [0, 1].
+
+    Returns:
+        "lost" below 0.5, "partial" from 0.5 up to 0.8, otherwise "good".
+    """
     if jf_alone < LOST_BELOW:
         return "lost"
     if jf_alone < GOOD_FROM:
@@ -82,8 +100,20 @@ def quality_bin(jf_alone: float) -> str:
 
 
 def read_scores(path: Path) -> pd.DataFrame:
+    """Read per-object J&F scores from a scorer CSV.
+
+    Args:
+        path: CSV with the columns video, object and J&F.
+
+    Returns:
+        Table with the columns video, object and jf (one row per object).
+
+    Raises:
+        E12Error: If the file is missing, lacks a column or has duplicate (video, object) rows.
+    """
     if not path.is_file():
         raise E12Error(f"missing input file: {path}")
+    # Keep video as text so names such as 00123 are not turned into numbers.
     table = pd.read_csv(path, dtype={"video": str})
     if not {"video", "object", "J&F"} <= set(table.columns):
         raise E12Error(f"{path}: columns are {list(table.columns)}")
@@ -93,6 +123,20 @@ def read_scores(path: Path) -> pd.DataFrame:
 
 
 def paired(alone: pd.DataFrame, method: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Join SAM 2 alone and a method per object and add each object's quality bin.
+
+    Args:
+        alone: Scores of SAM 2 alone (columns video, object, jf).
+        method: Scores of the method (same columns).
+        label: Method and test set, used in the error message.
+
+    Returns:
+        Table with jf_alone, jf_method and bin for every object.
+
+    Raises:
+        E12Error: If the two files do not score exactly the same objects.
+    """
+    # Outer join, so an object scored by only one side shows up as a missing value.
     joined = alone.merge(
         method, on=["video", "object"], how="outer", suffixes=("_alone", "_method")
     )
@@ -103,11 +147,25 @@ def paired(alone: pd.DataFrame, method: pd.DataFrame, label: str) -> pd.DataFram
 
 
 def _groups(frame: pd.DataFrame, column: str) -> dict[str, list[float]]:
+    """Collect the values of one column per video, as the bootstrap expects."""
     return {str(v): list(g[column]) for v, g in frame.groupby("video")}
 
 
 def summarise(frame: pd.DataFrame, seed: int, resamples: int) -> dict[str, object]:
+    """Summarise one group of objects: mean scores, change, interval and counts.
+
+    Args:
+        frame: Paired table with jf_alone and jf_method for the objects in the group.
+        seed: Bootstrap random seed.
+        resamples: Number of bootstrap resamples (videos are resampled, not objects).
+
+    Returns:
+        Row values for objects, videos, jf_alone, jf_method, delta_jf (method minus alone),
+        ci_low, ci_high and the improved, worse and unchanged object counts.
+    """
+    # Per-object change in J&F; the counts use the same tolerance as the E2 table.
     delta = frame["jf_method"] - frame["jf_alone"]
+    # Bootstrap over videos: each video keeps only the objects of this group.
     interval = bootstrap_delta(
         _groups(frame, "jf_method"), _groups(frame, "jf_alone"), seed=seed, resamples=resamples
     )
@@ -126,12 +184,26 @@ def summarise(frame: pd.DataFrame, seed: int, resamples: int) -> dict[str, objec
 
 
 def empty_summary() -> dict[str, object]:
+    """Return the row values for a bin that holds no objects (blank cells, zero counts)."""
     return {c: "" for c in OUT_COLUMNS[5:]} | {"objects": 0, "videos": 0}
 
 
 def rows_for(
     frame: pd.DataFrame, model: str, test_set: str, method: Method, seed: int, resamples: int
 ) -> list[dict[str, object]]:
+    """Build the four bin rows (lost, partial, good, all) for one method on one test set.
+
+    Args:
+        frame: Paired table from paired().
+        model: SAM 2 size of the method.
+        test_set: Test set name.
+        method: The method being summarised.
+        seed: Bootstrap random seed.
+        resamples: Number of bootstrap resamples.
+
+    Returns:
+        One row dict per bin, in the order of BINS; the last one is the all row.
+    """
     head = {"model": model, "test_set": test_set, "method": method.name, "oracle": method.oracle}
     rows = []
     for name in BINS:
@@ -142,13 +214,28 @@ def rows_for(
 
 
 def reference_delta(results_dir: Path, method: Method, test_set: str) -> float:
+    """Look up the delta J&F of a method in its committed table.
+
+    Args:
+        results_dir: Folder holding the committed tables.
+        method: Method whose table (e2, e5, e7 or e8) is read.
+        test_set: Test set name.
+
+    Returns:
+        The delta J&F versus SAM 2 alone stored in that table.
+
+    Raises:
+        E12Error: If the table is missing or does not hold exactly one matching row.
+    """
     path = results_dir / f"{method.table}.csv"
     if not path.is_file():
         raise E12Error(f"missing input file: {path}")
     table = pd.read_csv(path)
+    # The committed tables name their delta column differently.
     column = {"e2": "delta_JF", "e7": "delta_JF", "e5": "delta_vs_alone", "e8": "delta_JF"}[
         method.table
     ]
+    # Pick the single row of this method and test set (and model, where there is one).
     chosen = table[(table["method"] == method.name) & (table["test_set"] == test_set)]
     if "model" in table.columns:
         chosen = chosen[chosen["model"] == method.model]
@@ -158,6 +245,17 @@ def reference_delta(results_dir: Path, method: Method, test_set: str) -> float:
 
 
 def check_all_row(results_dir: Path, method: Method, test_set: str, delta: float) -> None:
+    """Check that the all-bin delta equals the delta in the committed table.
+
+    Args:
+        results_dir: Folder holding the committed tables.
+        method: Method being checked.
+        test_set: Test set name.
+        delta: Delta J&F computed here for the all bin.
+
+    Raises:
+        E12Error: If the two values differ by more than CHECK_TOL.
+    """
     expected = reference_delta(results_dir, method, test_set)
     if abs(expected - delta) > CHECK_TOL:
         raise E12Error(
@@ -173,7 +271,23 @@ def build(
     seed: int = DEFAULT_SEED,
     resamples: int = DEFAULT_RESAMPLES,
 ) -> list[dict[str, object]]:
+    """Compute the by-quality rows for every method and test set.
+
+    Args:
+        results_dir: Folder holding the per-object score CSVs and committed tables.
+        methods: Methods to compare with SAM 2 alone.
+        test_sets: Test sets to cover.
+        seed: Bootstrap random seed.
+        resamples: Number of bootstrap resamples.
+
+    Returns:
+        All output rows, four bins per method and test set.
+
+    Raises:
+        E12Error: If an input is missing or the all row disagrees with a committed table.
+    """
     out: list[dict[str, object]] = []
+    # One pass per method and test set; a method that was not run is skipped only if optional.
     for method in methods:
         for test_set in test_sets:
             alone_path = results_dir / f"sam2_{method.model}_{test_set}.csv"
@@ -181,14 +295,17 @@ def build(
             if method.optional and not method_path.is_file():
                 continue
             label = f"{method.name}/{test_set}"
+            # Pair per object, split into bins, then summarise each bin.
             frame = paired(read_scores(alone_path), read_scores(method_path), label)
             rows = rows_for(frame, method.model, test_set, method, seed, resamples)
+            # Safety check: the all row must agree with the published table before it is kept.
             check_all_row(results_dir, method, test_set, cast(float, rows[-1]["delta_jf"]))
             out.extend(rows)
     return out
 
 
 def write_rows(path: Path, rows: Sequence[dict[str, object]]) -> None:
+    """Write the rows to a CSV with the OUT_COLUMNS header; floats are written with repr."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -200,10 +317,20 @@ def write_rows(path: Path, rows: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: write the by-quality table.
+
+    Reads the per-object score CSVs and committed tables in --results-dir. Writes --out
+    (default results/e12_by_quality.csv) and prints the row count. Failures raise E12Error,
+    which ends the program with a traceback and a non-zero exit code.
+
+    Args:
+        argv: Command line arguments; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args(argv)
+    # Build every row first so nothing is written when an input is wrong.
     rows = build(args.results_dir)
     write_rows(args.out, rows)
     print(f"{len(rows)} rows -> {args.out} (analysis; bins use ground-truth scores)")

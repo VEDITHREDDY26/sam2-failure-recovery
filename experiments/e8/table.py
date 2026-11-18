@@ -49,6 +49,11 @@ class E8Error(ValueError):
 
 
 def load_reprompts(path: Path) -> pd.DataFrame:
+    """Read a re-prompt file written by experiments.e8.wrong_reprompts.
+
+    Raises:
+        E8Error: If the file is missing or its columns are not REPROMPT_COLUMNS.
+    """
     if not path.is_file():
         raise E8Error(f"missing input file: {path}")
     table = pd.read_csv(path, dtype={"video": str})
@@ -58,11 +63,27 @@ def load_reprompts(path: Path) -> pd.DataFrame:
 
 
 def _keys(rows: Sequence[ScoreRow]) -> set[tuple[str, int]]:
+    """Return the set of (video, object) pairs that a list of score rows covers."""
     return {(r.video, r.object) for r in rows}
 
 
 def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dict[str, object]]:
+    """Build the E8 table rows: SAM 2 alone, then each tracker variant per split.
+
+    Args:
+        results_dir: Folder holding scores, events and re-prompt files.
+        splits: Test sets to cover.
+
+    Returns:
+        One row per split for SAM 2 alone and per variant, with mean J, F, J&F, the change
+        versus SAM 2 alone and the re-prompt, rejected, wrong and unscored counts.
+
+    Raises:
+        E8Error: If a variant scores other objects than SAM 2 alone, or its re-prompt file
+            disagrees with its events.
+    """
     table: list[dict[str, object]] = []
+    # Per split: the SAM 2 alone row is the reference for all changes.
     for split in splits:
         alone = load_scores(results_dir / f"{ALONE}_{split}.csv")
         base = means(alone)
@@ -72,6 +93,7 @@ def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dic
             | {"delta_JF": 0.0}
             | {c: "" for c in TABLE_COLUMNS[8:]}
         )
+        # Then one row per tracker variant, after checking its inputs agree.
         for variant, method in VARIANTS.items():
             name = f"{method}_{split}"
             rows = load_scores(results_dir / f"{name}.csv")
@@ -79,6 +101,7 @@ def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dic
                 raise E8Error(f"{split}/{variant}: scores a different set of objects")
             events = load_events(results_dir / f"events_{name}.csv")
             reprompts = load_reprompts(results_dir / f"{name}_reprompts.csv")
+            # The event log and the re-prompt file must count the same re-prompts.
             actions = events["action"]
             if len(reprompts) != int((actions == "reprompted").sum()):
                 raise E8Error(f"{split}/{variant}: re-prompt file and events disagree")
@@ -98,7 +121,13 @@ def build_rows(results_dir: Path, splits: Sequence[str] = TEST_SETS) -> list[dic
 
 
 def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
+    """Write the table to a CSV with the TABLE_COLUMNS header.
+
+    The file is written under a temporary name and moved into place, so a failure never leaves
+    a half-written table. Floats are written with repr.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temporary file first, then replace the target in one step.
     temp = path.with_name(path.name + ".tmp")
     with temp.open("w", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
@@ -111,6 +140,15 @@ def write_table(path: Path, table: Sequence[dict[str, object]]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: write the E8 table.
+
+    Reads the score, events and re-prompt files in --results-dir for the chosen --splits and
+    writes --out (default results/e8.csv). Inconsistent inputs raise E8Error (traceback,
+    non-zero exit).
+
+    Args:
+        argv: Command line arguments; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", default="results")
     parser.add_argument("--out", default=DEFAULT_OUT)

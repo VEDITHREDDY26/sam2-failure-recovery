@@ -54,16 +54,33 @@ class FigureError(ValueError):
 
 
 def read_table(path: Path) -> pd.DataFrame:
+    """Read a CSV table.
+
+    Raises:
+        FigureError: If the file is missing.
+    """
     if not path.is_file():
         raise FigureError(f"missing input file: {path}")
     return pd.read_csv(path)
 
 
 def plot_by_quality(table: pd.DataFrame, figure_dir: Path) -> Path:
+    """Draw the change in J&F per quality bin, one panel per test set.
+
+    Args:
+        table: The E12 by-quality table.
+        figure_dir: Folder for the image.
+
+    Returns:
+        Path of e12_by_quality.png. Bars are in J&F points with 95 percent intervals; oracle
+        series are hatched.
+    """
     fig, axes = plt.subplots(1, len(TEST_SETS), figsize=(13.0, 5.2), dpi=DPI, sharey=True)
     width = 0.8 / len(BY_QUALITY_SERIES)
+    # One panel per test set; each series is one method, drawn as grouped bars per bin.
     for ax, test_set in zip(axes, TEST_SETS, strict=True):
         part = table[table["test_set"] == test_set]
+        # Bin labels carry the number of objects in the bin.
         ticks = []
         for name in BINS:
             count = part[(part["bin"] == name) & (part["method"] == BY_QUALITY_SERIES[0][1])]
@@ -100,7 +117,20 @@ def plot_by_quality(table: pd.DataFrame, figure_dir: Path) -> Path:
 
 
 def plot_decomposition(e7: pd.DataFrame, figure_dir: Path) -> Path:
+    """Draw the E7 arms (real and oracle) as J&F bars with the change versus SAM 2 alone.
+
+    Args:
+        e7: The E7 table.
+        figure_dir: Folder for the image.
+
+    Returns:
+        Path of e7_decomposition.png.
+
+    Raises:
+        FigureError: If an arm is missing for a test set.
+    """
     fig, axes = plt.subplots(1, len(TEST_SETS), figsize=(13.0, 5.2), dpi=DPI)
+    # One panel per test set; every arm must have a row.
     for ax, test_set in zip(axes, TEST_SETS, strict=True):
         part = e7[e7["test_set"] == test_set].set_index("arm")
         for arm in (*(a[0] for a in E7_ARMS), E7_BASE_ARM):
@@ -125,6 +155,7 @@ def plot_decomposition(e7: pd.DataFrame, figure_dir: Path) -> Path:
                 ha="center",
                 fontsize=9,
             )
+        # Dashed line = SAM 2 alone; the y axis is cut around it, so bars show the change.
         ax.axhline(base, color="black", linestyle="--", label=f"SAM 2 alone ({base:.1f})")
         ax.set_ylim(base - 12, base + 12)
         ax.set_xticks([])
@@ -140,8 +171,19 @@ def plot_decomposition(e7: pd.DataFrame, figure_dir: Path) -> Path:
 
 
 def plot_false_alarms(split: pd.DataFrame, bound: pd.DataFrame, figure_dir: Path) -> Path:
+    """Draw summed gain on real failures, false alarms and the verification strategies.
+
+    Args:
+        split: The false alarm table.
+        bound: The upper bound table.
+        figure_dir: Folder for the image.
+
+    Returns:
+        Path of e12_false_alarms.png, one panel per model.
+    """
     models = list(dict.fromkeys(split["model"]))
     fig, axes = plt.subplots(1, len(models), figsize=(11.0, 5.0), dpi=DPI)
+    # One panel per model; the first two bars split the candidates by ground truth.
     for ax, model in zip(axes, models, strict=True):
         classes = split[split["model"] == model].set_index("class")["gain_sum"].astype(float)
         strategies = bound[(bound["model"] == model) & (bound["kind"] == "strategy")]
@@ -149,6 +191,7 @@ def plot_false_alarms(split: pd.DataFrame, bound: pd.DataFrame, figure_dir: Path
         labels = ["real failures\n(GT split)", "false alarms\n(GT split)"]
         values = [classes["real_failure"], classes["false_alarm"]]
         colours = ["#2ca02c", "#d62728"]
+        # Then the summed gain of the verification strategies.
         for key, label in STRATEGY_LABELS:
             labels.append(label)
             values.append(strategies[key])
@@ -178,6 +221,16 @@ def plot_false_alarms(split: pd.DataFrame, bound: pd.DataFrame, figure_dir: Path
 
 
 def save(fig: Figure, path: Path, bottom: float = 0.0) -> Path:
+    """Lay out and save a figure, then close it.
+
+    Args:
+        fig: Figure to save.
+        path: Output image path; its folder is created if needed.
+        bottom: Fraction of the height kept free at the bottom for a legend.
+
+    Returns:
+        The path written.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout(rect=(0, bottom, 1, 1))
     fig.savefig(path)
@@ -186,10 +239,23 @@ def save(fig: Figure, path: Path, bottom: float = 0.0) -> Path:
 
 
 def make_figures(results_dir: Path, figure_dir: Path) -> list[Path]:
+    """Read the E12 tables and draw the three figures.
+
+    Args:
+        results_dir: Folder holding the tables.
+        figure_dir: Folder for the images.
+
+    Returns:
+        Paths of the images written.
+
+    Raises:
+        FigureError: If an input table is missing.
+    """
     by_quality = read_table(results_dir / "e12_by_quality.csv")
     e7 = read_table(results_dir / "e7.csv")
     split = read_table(results_dir / "e12_false_alarms.csv")
     bound = read_table(results_dir / "e12_upper_bound.csv")
+    # Each figure is drawn from tables already written.
     return [
         plot_by_quality(by_quality, figure_dir),
         plot_decomposition(e7, figure_dir),
@@ -198,6 +264,14 @@ def make_figures(results_dir: Path, figure_dir: Path) -> list[Path]:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command line entry point: draw the E12 figures.
+
+    Reads the tables in --results-dir, writes the images in --figure-dir and prints each
+    path. A missing table raises FigureError (traceback, non-zero exit).
+
+    Args:
+        argv: Command line arguments; None means sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--figure-dir", type=Path, default=Path("figures"))
