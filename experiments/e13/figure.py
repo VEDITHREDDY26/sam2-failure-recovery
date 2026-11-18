@@ -58,6 +58,7 @@ def panel_bars(rows: list[dict[str, str]], split: str) -> list[tuple[float, dict
 
 def tick_label(row: dict[str, str]) -> str:
     text = row["label"].removeprefix("rules + ").replace(" + ", "\n+ ").replace("_", "\n")
+    text = text.replace(" (", "\n(")
     return f"{row['model']}\n{text}"
 
 
