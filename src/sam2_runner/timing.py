@@ -30,6 +30,17 @@ TIMING_COLUMNS = CORE_COLUMNS + DEVICE_COLUMNS
 
 
 def timing_path(output_root: Path, method: str, split: str, video: str) -> Path:
+    """Return the path of one video's timing CSV.
+
+    Args:
+        output_root: Root folder of run outputs.
+        method: Method name.
+        split: Split name.
+        video: Video name (validated so it is safe in a path).
+
+    Returns:
+        <output_root>/<method>/<split>/timing/<video>.csv
+    """
     return run_dir(output_root, method, split) / "timing" / f"{validate_name(video, 'video')}.csv"
 
 
@@ -37,6 +48,7 @@ def device_fields(offload_video: bool = False) -> dict[str, Any]:
     """GPU and library versions; empty strings when torch (or a GPU) is not there."""
     fields: dict[str, Any] = {name: "" for name in DEVICE_COLUMNS}
     fields["offload_video"] = int(offload_video)
+    # torch is optional: on a CPU-only machine the device fields stay empty.
     try:
         torch = importlib.import_module("torch")
     except ImportError:
@@ -51,6 +63,20 @@ def device_fields(offload_video: bool = False) -> dict[str, Any]:
 def timing_row(
     video: str, frames: int, objects: int, compute_s: float, wall_s: float, offload_video: bool
 ) -> dict[str, Any]:
+    """Build the timing row of one video.
+
+    Args:
+        video: Video name.
+        frames: Number of frames in the video.
+        objects: Number of objects tracked.
+        compute_s: Seconds of SAM 2 compute (see the module docstring).
+        wall_s: Seconds for the whole call.
+        offload_video: Whether the frames were kept on the CPU.
+
+    Returns:
+        Dict with the core columns (fps = frames / compute_s, NaN if compute_s is 0) and the
+        device fields.
+    """
     fps = frames / compute_s if compute_s > 0 else float("nan")
     row: dict[str, Any] = dict(
         zip(CORE_COLUMNS, (video, frames, objects, compute_s, wall_s, fps), strict=True)
@@ -59,6 +85,12 @@ def timing_row(
 
 
 def write_timing(path: Path, row: dict[str, Any]) -> None:
+    """Write a one-row timing CSV, creating its folder if needed.
+
+    Args:
+        path: Destination CSV.
+        row: Row dict from timing_row.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([row], columns=list(TIMING_COLUMNS)).to_csv(path, index=False)
 
@@ -88,6 +120,14 @@ def collect_timing(
 
 
 def read_video_list(path: Path) -> list[str]:
+    """Read video names from a text file, one per line; blank lines are ignored.
+
+    Args:
+        path: Text file to read.
+
+    Raises:
+        ValueError: If the file has no names.
+    """
     names = [line.strip() for line in path.read_text().splitlines() if line.strip()]
     if not names:
         raise ValueError(f"{path}: no video names")
@@ -95,6 +135,19 @@ def read_video_list(path: Path) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Command-line entry point: collect per-video timing files into one CSV.
+
+    Reads the timing file of every video listed in --videos-file from the run folder, writes the
+    combined table to --out and prints the video count and the overall frames per second.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv.
+
+    Raises:
+        SystemExit: Status 2 from argparse on bad arguments or when the data-root environment
+            variable is not set.
+        FileNotFoundError: If a listed video has no usable timing file.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument("--model", choices=["tiny", "large"], required=True)
     parser.add_argument("--split", required=True)
@@ -102,12 +155,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--method", default=None)
     args = parser.parse_args(argv)
+    # Fail early with a clear message when the data folder is not configured.
     if not os.environ.get(DATA_ROOT_ENV):
         parser.error(f"{DATA_ROOT_ENV} is not set")
     from src.sam2_runner.smoke import load_data_config
 
     cfg = load_data_config()
     method = validate_method(args.method or f"sam2_{args.model}")
+    # Every listed video must have timing; a missing one stops the collection.
     table = collect_timing(
         cfg.data_root / cfg.output_root,
         method,
@@ -116,6 +171,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     table.to_csv(args.out, index=False)
+    # Overall speed is total frames over total compute time, not a mean of per-video rates.
     total_fps = table["frames"].sum() / table["compute_s"].sum()
     print(f"{len(table)} videos, {total_fps:.1f} fps overall -> {args.out}")
 

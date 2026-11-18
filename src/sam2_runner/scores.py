@@ -26,6 +26,7 @@ SCORE_KEY = "object_score_logits"
 
 def read_stored_score(state: Mapping[str, Any], obj_id: int, frame_idx: int) -> float | None:
     """SAM 2's object-score logit for this object at this frame, or None if it is missing."""
+    # Find the object's slot, then look in prompted and non-prompted frame outputs.
     obj_idx = state.get("obj_id_to_idx", {}).get(obj_id)
     outputs = state.get("output_dict_per_obj", {})
     if obj_idx is None or obj_idx not in outputs:
@@ -37,6 +38,7 @@ def read_stored_score(state: Mapping[str, Any], obj_id: int, frame_idx: int) -> 
         value = frame_out.get(SCORE_KEY)
         if value is None:
             return None
+        # The stored score has shape 1x1; anything else is treated as an error.
         values = to_numpy(value).reshape(-1)
         if values.size != 1:
             raise ValueError(f"{SCORE_KEY} has {values.size} values, expected 1")

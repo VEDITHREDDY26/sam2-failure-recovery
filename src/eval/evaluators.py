@@ -26,12 +26,22 @@ class EvaluatorError(RuntimeError):
 
 @dataclass(frozen=True)
 class Pin:
+    """A pinned checkout of an external repository.
+
+    Attributes:
+        name: Folder name under third_party/.
+        url: Git URL to fetch from.
+        commit: Full commit hash that must be checked out.
+        sparse_paths: Sub-folders to check out; empty means the whole repository.
+    """
+
     name: str
     url: str
     commit: str
     sparse_paths: tuple[str, ...] = ()
 
     def path(self, root: Path = THIRD_PARTY) -> Path:
+        """Folder of this checkout under the given root."""
         return root / self.name
 
 
@@ -51,6 +61,18 @@ SAV_BENCHMARK_FILE = Path("sav_dataset") / "utils" / "sav_benchmark.py"
 
 
 def git(repo: Path, *args: str) -> str:
+    """Run a git command in a repository and return its output.
+
+    Args:
+        repo: Repository folder.
+        *args: Arguments after `git -C <repo>`.
+
+    Returns:
+        Standard output without surrounding whitespace.
+
+    Raises:
+        EvaluatorError: If git exits with a non-zero status.
+    """
     result = subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
     )
@@ -86,9 +108,11 @@ def load_davis(root: Path = THIRD_PARTY) -> ModuleType:
 def load_sav_benchmark(root: Path = THIRD_PARTY) -> ModuleType:
     """The official `sav_benchmark` module, loaded by file path under a unique name."""
     repo = check_checkout(SAV_PIN, root)
+    # Reuse the module if it is already loaded from this checkout.
     existing = sys.modules.get(SAV_MODULE_NAME)
     if existing is not None and Path(existing.__file__ or "").is_relative_to(repo):
         return existing
+    # Load by file path under a unique name so it cannot clash with other packages.
     spec = importlib.util.spec_from_file_location(SAV_MODULE_NAME, repo / SAV_BENCHMARK_FILE)
     if spec is None or spec.loader is None:
         raise EvaluatorError(f"cannot load {repo / SAV_BENCHMARK_FILE}")

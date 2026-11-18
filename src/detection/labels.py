@@ -29,6 +29,11 @@ def mask_iou(pred: BoolMask, gt: BoolMask) -> float:
 
 
 def is_failure(iou: float) -> bool:
+    """Return True if a mask IoU counts as a failure (below FAILURE_IOU, 0.5).
+
+    Args:
+        iou: Intersection over union in [0, 1].
+    """
     return iou < FAILURE_IOU
 
 
@@ -37,9 +42,11 @@ def video_labels(video: VideoSample, output_root: Path, method: str, split: str)
 
     Objects that are never visible were never run and are skipped.
     """
+    # Collect one row per object and annotated frame from the object's prompt frame on.
     rows: list[tuple[str, int, int, float, bool]] = []
     for obj_id in video.object_ids:
         try:
+            # Frames before the prompt frame are not scored: SAM 2 had no prompt there.
             start = video.first_box(obj_id).frame_index
         except NeverVisibleError:
             continue
@@ -50,6 +57,7 @@ def video_labels(video: VideoSample, output_root: Path, method: str, split: str)
             if gt is None:
                 continue
             stem = video.frame_stems[frame_index]
+            # Compare the stored prediction (this object's id) with the ground-truth mask.
             label = read_label_map(mask_path(output_root, method, split, video.name, stem))
             iou = mask_iou(label == obj_id, gt)
             rows.append((video.name, obj_id, frame_index, iou, is_failure(iou)))
@@ -58,6 +66,11 @@ def video_labels(video: VideoSample, output_root: Path, method: str, split: str)
 
 
 def count_skipped_objects(video: VideoSample) -> int:
+    """Count the objects that are never visible in an annotated frame and so were never run.
+
+    Args:
+        video: Video with ground truth.
+    """
     skipped = 0
     for obj_id in video.object_ids:
         try:

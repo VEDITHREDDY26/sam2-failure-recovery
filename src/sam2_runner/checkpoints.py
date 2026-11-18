@@ -16,6 +16,17 @@ from src.sam2_runner.predictor import checkpoint_dir
 
 
 def resolve_dir() -> Path:
+    """Return the folder that holds the SAM 2.1 checkpoints.
+
+    The data root comes from the environment variable named by DATA_ROOT_ENV; the checkpoint
+    folder name inside it comes from configs/models.yaml.
+
+    Returns:
+        Path of the checkpoint directory.
+
+    Raises:
+        SystemExit: If the data-root environment variable is not set.
+    """
     root = os.environ.get(DATA_ROOT_ENV, "").strip()
     if not root:
         raise SystemExit(f"{DATA_ROOT_ENV} is not set; point it at the Drive data folder")
@@ -23,6 +34,15 @@ def resolve_dir() -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Print the checkpoint directory on standard output.
+
+    Args:
+        argv: Command-line arguments; None means sys.argv. --print-dir is required.
+
+    Raises:
+        SystemExit: With the message as exit text (status 1) if the data-root environment
+            variable is not set; argparse exits with status 2 on bad arguments.
+    """
     parser = argparse.ArgumentParser(description="Print the checkpoint directory.")
     parser.add_argument("--print-dir", action="store_true", required=True)
     parser.parse_args(argv)
