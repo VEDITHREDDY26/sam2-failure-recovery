@@ -1,0 +1,3 @@
+video,object_id,frame_index,gt_frame_index,iou_after,wrong
+dogs-jump,3,8,8,0.8553201733269138,False
+kite-surf,2,12,12,0.0,True

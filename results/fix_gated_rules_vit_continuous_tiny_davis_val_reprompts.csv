@@ -1,0 +1,4 @@
+video,object_id,frame_index,gt_frame_index,iou_after,wrong
+bike-packing,1,15,15,0.7088274632189032,False
+motocross-jump,2,1,1,0.3983084977849376,True
+shooting,3,3,3,0.8261635741681351,False
