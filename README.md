@@ -110,8 +110,13 @@ The runner skips videos whose output is already complete, so a job can be resubm
 
 ### Data layout
 
-Datasets, checkpoints and every generated mask stay outside the repository. Set
-`SAM2FR_DATA_ROOT` to one folder; every path in `configs/data.yaml` and `configs/models.yaml`
+Datasets, checkpoints and every generated mask stay outside the repository. Both datasets are
+public and are not included:
+
+- DAVIS 2017 (TrainVal, 480p): https://davischallenge.org/davis2017/code.html
+- SA-V (the `sav_val` and `sav_test` parts): https://ai.meta.com/datasets/segment-anything-video/
+
+Set `SAM2FR_DATA_ROOT` to one folder; every path in `configs/data.yaml` and `configs/models.yaml`
 is relative to it:
 
 ```
