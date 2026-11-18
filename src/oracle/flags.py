@@ -17,6 +17,8 @@ ORACLE_FAILURE_IOU = 0.5
 
 def oracle_iou(pred_mask: BoolMask, gt_mask: BoolMask) -> float:
     """Intersection over union; two empty masks count as a perfect match (1.0)."""
+    # Two empty masks have union 0 and count as a perfect match, so an absent object is not a
+    # failure.
     union = int(np.count_nonzero(pred_mask | gt_mask))
     if union == 0:
         return 1.0
@@ -40,8 +42,30 @@ def oracle_box(gt_mask: BoolMask | None) -> Box | None:
 def oracle_flag_at(
     video: VideoSample, obj_id: int, frame_index: int, pred_mask: BoolMask
 ) -> bool | None:
+    """Oracle failure flag for one object at one frame, reading ground truth from the video.
+
+    Args:
+        video: Loaded video sample that owns the ground-truth masks.
+        obj_id: Object id (1-based, as in the label maps).
+        frame_index: 0-based frame index.
+        pred_mask: Predicted boolean mask at that frame.
+
+    Returns:
+        True if IoU with ground truth is below ORACLE_FAILURE_IOU, False if not, None when the
+        frame has no annotation.
+    """
     return oracle_flag(pred_mask, video.gt_mask(obj_id, frame_index))
 
 
 def oracle_box_at(video: VideoSample, obj_id: int, frame_index: int) -> Box | None:
+    """Tight ground-truth box of one object at one frame.
+
+    Args:
+        video: Loaded video sample that owns the ground-truth masks.
+        obj_id: Object id (1-based, as in the label maps).
+        frame_index: 0-based frame index.
+
+    Returns:
+        Box in xyxy pixels, or None if the frame is unannotated or the object is absent.
+    """
     return oracle_box(video.gt_mask(obj_id, frame_index))

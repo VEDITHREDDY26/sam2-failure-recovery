@@ -13,6 +13,19 @@ from src.recovery.vit_tracker import load_vit_config, make_vit_factory
 def make_box_source(
     run_cfg: RecoveryRunConfig, settings: RecoverySettings
 ) -> Callable[[str], BoxSource]:
+    """Choose the box source class a run config names and return a per-video factory for it.
+
+    Args:
+        run_cfg: Run config; its box_source is "csrt", "motion" or "vit_<mode>".
+        settings: Recovery settings (supplies the CSRT tracker mode).
+
+    Returns:
+        A function from video name to a fresh BoxSource, so each video starts with no history.
+
+    Raises:
+        ValueError: If the box source is not a real-system one (the oracle is refused).
+        ConfigError: For ViT sources, if the model file is missing or has a different checksum.
+    """
     source = run_cfg.box_source
     if source == "csrt":
         return lambda video: CSRTBoxSource(settings.tracker_mode)

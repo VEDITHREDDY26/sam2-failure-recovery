@@ -30,8 +30,23 @@ _FLOAT_COLUMNS = ("object_score", "centre_x", "centre_y")
 
 
 def _validate(df: pd.DataFrame, where: str) -> pd.DataFrame:
+    """Check a signal table against the schema and return a cleaned copy.
+
+    Args:
+        df: Table with exactly the SIGNAL_COLUMNS in order.
+        where: File name or caller used in error messages.
+
+    Returns:
+        Copy with int, float, str and bool dtypes applied (empty becomes bool).
+
+    Raises:
+        ValueError: On wrong columns, bad dtypes, duplicate keys, an empty flag that disagrees
+            with area, negative area, or a centre that is NaN when the mask is not empty (or the
+            reverse).
+    """
     if tuple(df.columns) != SIGNAL_COLUMNS:
         raise ValueError(f"{where}: columns {list(df.columns)} != {list(SIGNAL_COLUMNS)}")
+    # Coerce dtypes on a copy so the caller's table is not changed.
     out = df.copy()
     try:
         out["video"] = out["video"].astype(str)
@@ -47,6 +62,8 @@ def _validate(df: pd.DataFrame, where: str) -> pd.DataFrame:
         out["empty"] = flags.astype(bool)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{where}: bad dtype ({exc})") from exc
+    # Consistency checks: unique keys, empty flag agrees with area, centre is NaN only for empty
+    # masks.
     if out.duplicated(_KEY).any():
         raise ValueError(f"{where}: duplicate (video, object_id, frame_index) rows")
     if (out["empty"] != (out["area"] == 0)).any():
@@ -61,6 +78,15 @@ def _validate(df: pd.DataFrame, where: str) -> pd.DataFrame:
 
 
 def write_signals(path: str | Path, df: pd.DataFrame) -> None:
+    """Validate a signal table and write it as CSV (empty as 0/1, missing values as "nan").
+
+    Args:
+        path: Destination CSV path; parent folders are created.
+        df: Table with the SIGNAL_COLUMNS.
+
+    Raises:
+        ValueError: If the table is invalid.
+    """
     path = Path(path)
     clean = _validate(df, str(path))
     clean["empty"] = clean["empty"].astype(int)
@@ -69,6 +95,17 @@ def write_signals(path: str | Path, df: pd.DataFrame) -> None:
 
 
 def read_signals(path: str | Path) -> pd.DataFrame:
+    """Read a signal CSV and validate it.
+
+    Args:
+        path: CSV path written by write_signals.
+
+    Returns:
+        The validated table (empty as bool).
+
+    Raises:
+        ValueError: If the file does not match the schema.
+    """
     df = pd.read_csv(path, float_precision="round_trip", dtype={"video": str})
     return _validate(df, str(path))
 
@@ -82,6 +119,7 @@ def signals_from_masks(
     """Signal rows for one object over consecutive frames (frame_index = list position)."""
     if len(masks) != len(object_scores):
         raise ValueError(f"{len(masks)} masks but {len(object_scores)} object scores")
+    # One row per frame: area and centroid come straight from the mask pixels.
     rows = []
     for index, (mask, score) in enumerate(zip(masks, object_scores, strict=True)):
         ys, xs = np.nonzero(mask)

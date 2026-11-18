@@ -25,6 +25,21 @@ EVENT_COLUMNS = (
 
 @dataclass(frozen=True)
 class Event:
+    """One recovery trigger: what happened when the detector flagged an object at a frame.
+
+    Attributes:
+        video: Video name.
+        object_id: Object id.
+        frame_index: 0-based frame index of the flag.
+        fired: Names of the detector rules that fired.
+        action: What the loop did: "reprompted", "rejected" (box check), "tracker_lost",
+            "cooldown", "verify_rejected" or "gated".
+        reason: Why a box was rejected, gated or lost (empty when re-prompted).
+        raw_box: Unclipped proposed box in xyxy pixels, or None if there was none.
+        restart_frames: Number of frames replayed to restart SAM 2 for a re-prompt (frame_index
+            minus the prompt frame), else 0.
+    """
+
     video: str
     object_id: int
     frame_index: int
@@ -35,7 +50,14 @@ class Event:
     restart_frames: int = 0
 
     def as_row(self) -> tuple[object, ...]:
+        """Flatten the event into a tuple in EVENT_COLUMNS order.
+
+        Returns:
+            Values for one CSV row; fired names are joined with "+" and a missing box gives four
+            empty strings.
+        """
         box = self.raw_box
+        # The four box columns stay empty when the event has no proposed box.
         corners = (box.x0, box.y0, box.x1, box.y1) if box else ("", "", "", "")
         return (
             self.video,

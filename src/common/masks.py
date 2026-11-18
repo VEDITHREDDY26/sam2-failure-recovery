@@ -26,6 +26,7 @@ def davis_palette() -> list[int]:
     for index in range(256):
         r = g = b = 0
         c = index
+        # Spread the bits of the index over the colour channels, high bits first (VOC colour map).
         for bit in range(8):
             r |= ((c >> 0) & 1) << (7 - bit)
             g |= ((c >> 1) & 1) << (7 - bit)
@@ -36,6 +37,15 @@ def davis_palette() -> list[int]:
 
 
 def write_label_map(path: str | Path, label: LabelMap) -> None:
+    """Save a label map as an indexed PNG with the DAVIS palette, creating folders as needed.
+
+    Args:
+        path: Destination PNG path.
+        label: HxW uint8 array, 0 = background, 1..255 = object ids.
+
+    Raises:
+        ValueError: If label is not a 2-D uint8 array.
+    """
     if label.ndim != 2 or label.dtype != np.uint8:
         raise ValueError(f"label map must be a 2-D uint8 array, got {label.dtype} {label.shape}")
     path = Path(path)
@@ -46,6 +56,17 @@ def write_label_map(path: str | Path, label: LabelMap) -> None:
 
 
 def read_label_map(path: str | Path) -> LabelMap:
+    """Load an indexed PNG back into a label map.
+
+    Args:
+        path: PNG path.
+
+    Returns:
+        HxW uint8 array of object ids (palette indices, not colours).
+
+    Raises:
+        ValueError: If the PNG is not in indexed ("P") mode.
+    """
     with Image.open(path) as image:
         if image.mode != "P":
             raise ValueError(f"{path}: expected an indexed (mode P) PNG, got mode {image.mode}")
@@ -69,6 +90,7 @@ def masks_to_label_map(
     per-pixel score (logit) if `scores` is given (ties go to the smaller id), otherwise to
     the smallest object id.
     """
+    # Validate every object's id, mask shape and scores before painting anything.
     for obj_id, mask in masks.items():
         if not 1 <= obj_id <= MAX_OBJECT_ID:
             raise ValueError(f"object id {obj_id} outside 1..{MAX_OBJECT_ID}")
@@ -79,6 +101,7 @@ def masks_to_label_map(
                 raise ValueError(f"no scores for object {obj_id}")
             if scores[obj_id].shape != shape:
                 raise ValueError(f"scores for object {obj_id} have shape {scores[obj_id].shape}")
+    # Paint objects in ascending id order; `best` tracks the highest logit seen per pixel.
     label = np.zeros(shape, dtype=np.uint8)
     best: npt.NDArray[np.float64] = np.full(shape, -np.inf)
     for obj_id in sorted(masks):

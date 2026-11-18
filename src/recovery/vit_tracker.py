@@ -27,11 +27,22 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "recovery" / "vi
 
 
 class RawViT(Protocol):
-    def init(self, image: Any, bounding_box: Any) -> Any: ...
+    """Protocol of OpenCV's VitTrack object, as far as this module uses it.
 
-    def update(self, image: Any) -> Any: ...
+    The camelCase method name follows the OpenCV API.
+    """
 
-    def getTrackingScore(self) -> float: ...  # noqa: N802
+    def init(self, image: Any, bounding_box: Any) -> Any:
+        """Start tracking in an image from a box given as (x, y, width, height)."""
+        ...
+
+    def update(self, image: Any) -> Any:
+        """Track into the next image; returns (found, (x, y, width, height))."""
+        ...
+
+    def getTrackingScore(self) -> float:  # noqa: N802
+        """Confidence of the last update."""
+        ...
 
 
 ViTFactory = Callable[[], RawViT]
@@ -40,12 +51,27 @@ ViTFactory = Callable[[], RawViT]
 @register("vit_tracker")
 @dataclasses.dataclass(frozen=True)
 class ViTConfig:
+    """Settings of the ViT tracker, loaded from configs/recovery/vit.yaml.
+
+    Attributes:
+        model: Model file path relative to the data root.
+        sha256: Expected sha256 hex digest of the model file.
+        anchor_iou: Overlap needed for the anchored mode to restart on SAM 2's mask box.
+        score_threshold_internal: Score threshold given to the tracker itself (0 = always return
+            a box and score).
+    """
+
     model: str  # path relative to the data root
     sha256: str
     anchor_iou: float
     score_threshold_internal: float
 
     def __post_init__(self) -> None:
+        """Validate the settings.
+
+        Raises:
+            ConfigError: If anchor_iou is outside [0, 1] or sha256 is not 64 characters.
+        """
         if not 0.0 <= self.anchor_iou <= 1.0:
             raise ConfigError("anchor_iou must be in [0, 1]")
         if len(self.sha256) != 64:
@@ -53,6 +79,17 @@ class ViTConfig:
 
 
 def load_vit_config(path: Path = CONFIG_PATH) -> ViTConfig:
+    """Load and validate the ViT tracker config.
+
+    Args:
+        path: YAML file; defaults to the committed one.
+
+    Returns:
+        The settings.
+
+    Raises:
+        ConfigError: If the file is invalid or is not a vit_tracker config.
+    """
     cfg = load_config(path)
     if not isinstance(cfg, ViTConfig):
         raise ConfigError(f"{path}: not a vit_tracker config")
@@ -69,6 +106,7 @@ def vit_model_path(cfg: ViTConfig, data_root: Path | None = None) -> Path:
     path = data_root / cfg.model
     if not path.is_file():
         raise ConfigError(f"ViT model file not found: {path}")
+    # The pinned checksum guarantees that the same model file is used in every run.
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if digest != cfg.sha256:
         raise ConfigError(f"ViT model {path}: sha256 {digest} does not match the pinned value")
@@ -76,9 +114,22 @@ def vit_model_path(cfg: ViTConfig, data_root: Path | None = None) -> Path:
 
 
 def make_vit_factory(cfg: ViTConfig, data_root: Path | None = None) -> ViTFactory:
+    """Build a function that creates ViT trackers from the verified model file.
+
+    Args:
+        cfg: ViT settings.
+        data_root: Data root; read from the environment when None.
+
+    Returns:
+        A callable that returns a new raw tracker each time.
+
+    Raises:
+        ConfigError: If the model file is missing, altered, or the data root is not set.
+    """
     model = vit_model_path(cfg, data_root)
 
     def factory() -> RawViT:
+        """Create one OpenCV ViT tracker with the model path and score threshold."""
         params = cv2.TrackerVit_Params()  # type: ignore[attr-defined]
         params.net = str(model)
         params.tracking_score_threshold = cfg.score_threshold_internal
@@ -88,7 +139,15 @@ def make_vit_factory(cfg: ViTConfig, data_root: Path | None = None) -> ViTFactor
 
 
 class ViTTracker:
+    """A ViT tracker that is restarted on SAM 2's reliable masks (same interface as AlignedCSRT).
+
+    Attributes:
+        last_reliable_frame: 0-based index of the frame of the last successful reinit, or None.
+        last_reliable_box: Box (xyxy pixels) used at that reinit, or None.
+    """
+
     def __init__(self, factory: ViTFactory) -> None:
+        """Store the tracker factory; the tracker itself is created at the first reinit."""
         self._factory = factory
         self._tracker: RawViT | None = None
         self._shape = (0, 0)
@@ -97,6 +156,7 @@ class ViTTracker:
 
     @property
     def initialised(self) -> bool:
+        """True once a reinit has succeeded."""
         return self._tracker is not None
 
     def reinit(
@@ -107,9 +167,11 @@ class ViTTracker:
         An empty mask or a refused box keeps the state.
         """
         _check_frame(frame_bgr)
+        # The new target is the box of the reliable mask; an empty mask leaves the state unchanged.
         box = box_from_mask(mask)
         if box is None:
             return "empty_mask"
+        # Reuse the existing tracker object so the ViT model file is loaded only once.
         tracker = self._tracker if self._tracker is not None else self._factory()
         try:
             tracker.init(frame_bgr, to_xywh(box))
@@ -122,6 +184,16 @@ class ViTTracker:
         return "reinitialised"
 
     def update(self, frame_bgr: npt.NDArray[np.uint8]) -> TrackResult:
+        """Follow the object on the next frame.
+
+        Args:
+            frame_bgr: BGR uint8 image of the current frame.
+
+        Returns:
+            "ok" with the clipped box, raw box and tracker score; "lost" if the tracker failed or
+            returned an empty or fully outside box (the score is kept for the outside case);
+            "not_initialised" if reinit never succeeded.
+        """
         _check_frame(frame_bgr)
         if self._tracker is None:
             return TrackResult("not_initialised", None, None)
@@ -134,6 +206,7 @@ class ViTTracker:
         x, y, w, h = (int(round(v)) for v in rect)
         if w <= 0 or h <= 0:
             return TrackResult("lost", None, None)
+        # Unlike CSRT, the ViT tracker reports a confidence for each box.
         score = float(self._tracker.getTrackingScore())
         raw = from_xywh(x, y, w, h)
         clipped = clip(raw, *self._shape)

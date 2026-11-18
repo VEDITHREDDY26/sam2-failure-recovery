@@ -23,6 +23,16 @@ ReinitStatus = Literal["reinitialised", "empty_mask", "init_failed"]
 
 @dataclass(frozen=True)
 class TrackResult:
+    """Result of asking a tracker for the object's box on one frame.
+
+    Attributes:
+        status: "ok", "lost" (tracker failed or box has no area or lies outside the image) or
+            "not_initialised" (never started).
+        box: Box clipped to the frame in xyxy pixels; None unless status is "ok".
+        raw_box: Tracker output before clipping, which may lie partly outside the frame.
+        score: Tracker confidence when the tracker has one (CSRT has none).
+    """
+
     status: Status
     box: Box | None  # clipped to the frame; None unless status is "ok"
     raw_box: Box | None  # tracker output before clipping (may lie partly outside the frame)
@@ -30,12 +40,25 @@ class TrackResult:
 
 
 def _check_frame(frame: npt.NDArray[np.uint8]) -> None:
+    """Reject frames that are not HxWx3 uint8 images.
+
+    Raises:
+        ValueError: If the frame has the wrong shape or dtype (OpenCV expects BGR here).
+    """
     if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
         raise ValueError(f"expected an HxWx3 uint8 BGR frame, got {frame.dtype} {frame.shape}")
 
 
 class AlignedCSRT:
+    """A CSRT tracker that is restarted on SAM 2's reliable masks.
+
+    Attributes:
+        last_reliable_frame: 0-based index of the frame of the last successful reinit, or None.
+        last_reliable_box: Box (xyxy pixels) used at that reinit, or None.
+    """
+
     def __init__(self) -> None:
+        """Create an uninitialised tracker."""
         self._tracker: cv2.Tracker | None = None
         self._shape = (0, 0)
         self.last_reliable_frame: int | None = None
@@ -43,6 +66,7 @@ class AlignedCSRT:
 
     @property
     def initialised(self) -> bool:
+        """True once a reinit has succeeded."""
         return self._tracker is not None
 
     def reinit(
@@ -70,12 +94,22 @@ class AlignedCSRT:
         return "reinitialised"
 
     def update(self, frame_bgr: npt.NDArray[np.uint8]) -> TrackResult:
+        """Follow the object on the next frame.
+
+        Args:
+            frame_bgr: BGR uint8 image of the current frame.
+
+        Returns:
+            "ok" with the clipped and raw boxes, "lost" if CSRT lost the object or returned an
+            empty or fully outside box, or "not_initialised" if reinit never succeeded.
+        """
         _check_frame(frame_bgr)
         if self._tracker is None:
             return TrackResult("not_initialised", None, None)
         found, rect = self._tracker.update(frame_bgr)
         if not found:
             return TrackResult("lost", None, None)
+        # OpenCV returns float xywh; round to whole pixels and convert to xyxy.
         x, y, w, h = (int(round(v)) for v in rect)
         if w <= 0 or h <= 0:
             return TrackResult("lost", None, None)
