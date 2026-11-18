@@ -1,3 +1,5 @@
+"""Tests for the gate pilot script using a fake ground-truth reader and generated inputs."""
+
 from pathlib import Path
 from typing import Any
 

@@ -1,3 +1,7 @@
+"""Tests for the verification pilot check: all-rejected videos must equal SAM 2 alone, and
+accepted videos are compared only before the first re-prompt.
+"""
+
 import json
 import math
 import shutil

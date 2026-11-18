@@ -1,3 +1,7 @@
+"""Tests for the seeded rerun check: videos re-derived from the val list, identical runs
+pass, per-video boundary is inclusive and the mean tolerance is enforced.
+"""
+
 import random
 from pathlib import Path
 

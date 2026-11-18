@@ -1,3 +1,5 @@
+"""Smoke test that the project packages import."""
+
 import importlib
 
 import pytest

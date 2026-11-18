@@ -1,3 +1,7 @@
+"""Tests for drawing the verification subset: seeded, sorted, order independent, size checks
+and the committed 60-video file.
+"""
+
 from pathlib import Path
 
 import pytest

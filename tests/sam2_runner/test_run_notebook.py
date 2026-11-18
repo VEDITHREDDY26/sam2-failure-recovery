@@ -1,3 +1,7 @@
+"""Tests for the run notebook: all six run commands present, install, hole-filling check,
+prompt, check and score cells, and valid code cells.
+"""
+
 import ast
 import json
 import re

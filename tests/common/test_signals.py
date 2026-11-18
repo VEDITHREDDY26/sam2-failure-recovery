@@ -1,3 +1,7 @@
+"""Tests for the signal CSV schema: bit-exact round trip, column order, duplicate keys and
+empty-area consistency.
+"""
+
 from pathlib import Path
 
 import numpy as np

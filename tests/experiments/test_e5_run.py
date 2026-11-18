@@ -1,3 +1,8 @@
+"""Tests for the learned-detector run script using a fake predictor.
+
+Checks help works without data, rule configs and modified models are refused, and it runs.
+"""
+
 import json
 from pathlib import Path
 

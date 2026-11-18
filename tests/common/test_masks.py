@@ -1,3 +1,7 @@
+"""Tests for mask PNG reading and writing: empty frames, multi-object round trips,
+overlap resolution, RGB rejection and the DAVIS palette.
+"""
+
 from pathlib import Path
 
 import numpy as np

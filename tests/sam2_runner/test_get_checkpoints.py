@@ -1,3 +1,7 @@
+"""Tests for the checkpoint download script: clear failure without a data root, directory
+from config and existing files skipped without network.
+"""
+
 import os
 import subprocess
 import sys

@@ -1,3 +1,7 @@
+"""Tests for candidate verification in the recovery loop: off matches the plain run,
+logging and accept-all do not change it, and rejected candidates are not replayed.
+"""
+
 import json
 import math
 from pathlib import Path

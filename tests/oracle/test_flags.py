@@ -1,3 +1,7 @@
+"""Tests for the oracle flags: they agree with the failure label definition, unannotated
+frames give None and oracle boxes are tight.
+"""
+
 import numpy as np
 import pytest
 

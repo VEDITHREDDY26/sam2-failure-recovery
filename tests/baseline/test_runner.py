@@ -1,3 +1,8 @@
+"""Tests for the per-video baseline runner using a scripted tracker and a spy mask reader.
+
+The spy confirms ground truth is read only for the prompt frame.
+"""
+
 import dataclasses
 from pathlib import Path
 

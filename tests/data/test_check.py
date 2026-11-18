@@ -1,3 +1,7 @@
+"""Tests for the dataset check script: expected counts, report, full mode, count mismatches
+and broken videos.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

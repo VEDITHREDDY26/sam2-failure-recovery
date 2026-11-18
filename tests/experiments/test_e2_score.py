@@ -1,3 +1,7 @@
+"""Tests for scoring the full system: frames recovered and broken per object, incomplete
+runs refused, the SA-V test subset and the videos option.
+"""
+
 from pathlib import Path
 
 import pandas as pd

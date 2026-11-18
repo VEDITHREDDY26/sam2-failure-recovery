@@ -1,3 +1,7 @@
+"""Tests for the E10 overlay selection rule: improved, worse and median videos with ties
+broken by name, never padded, and noise-level changes skipped.
+"""
+
 from pathlib import Path
 
 import cv2

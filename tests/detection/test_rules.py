@@ -1,3 +1,7 @@
+"""Tests for the hand-set failure rules: score, area change, centre jump, disappearance,
+border suppression and the other thresholds.
+"""
+
 import dataclasses
 import math
 from pathlib import Path

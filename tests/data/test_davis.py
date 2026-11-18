@@ -1,3 +1,7 @@
+"""Tests for the DAVIS loader: video list order, numeric frame order, ground-truth masks,
+partly occluded frames and first-frame boxes.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

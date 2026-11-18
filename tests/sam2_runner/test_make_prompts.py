@@ -1,3 +1,7 @@
+"""Tests for building prompt files: DAVIS val objects at frame zero, late SA-V objects at
+their own frame, never-visible objects reported, and the SA-V test subset.
+"""
+
 import json
 from pathlib import Path
 

@@ -1,3 +1,5 @@
+"""Tests that the re-prompt spike notebook is valid and runs the spike for both models."""
+
 import json
 
 from src.sam2_runner.predictor import REPO_ROOT

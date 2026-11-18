@@ -1,3 +1,5 @@
+"""Tests for the recovery settings: shipped values, bad values and unknown keys."""
+
 from pathlib import Path
 
 import pytest

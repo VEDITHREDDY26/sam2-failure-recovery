@@ -1,3 +1,7 @@
+"""Tests for the bootstrap intervals: constant data, exact enumeration on two videos,
+seeding and the paired difference.
+"""
+
 from itertools import product
 
 import numpy as np

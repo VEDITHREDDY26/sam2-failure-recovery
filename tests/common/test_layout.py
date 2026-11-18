@@ -1,3 +1,5 @@
+"""Tests for the output path layout and the validation of method, split, video and frame names."""
+
 from pathlib import Path
 
 import pytest

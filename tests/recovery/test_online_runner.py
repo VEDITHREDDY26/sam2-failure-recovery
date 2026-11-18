@@ -1,3 +1,7 @@
+"""Tests for the online runner: documented output layout, skipping complete videos and
+resuming after a killed run.
+"""
+
 from pathlib import Path
 from typing import Any
 

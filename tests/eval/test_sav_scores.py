@@ -1,3 +1,7 @@
+"""Tests for the SA-V scorer wrapper: object folder mapping, perfect score on ground truth,
+empty objects and annotated-frame-only requirements.
+"""
+
 from pathlib import Path
 
 import numpy as np

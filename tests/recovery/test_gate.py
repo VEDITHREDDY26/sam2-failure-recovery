@@ -1,3 +1,7 @@
+"""Tests for the candidate gate: off never blocks, low score and agreement rules, and
+gated candidates are logged without a re-prompt or cooldown.
+"""
+
 from pathlib import Path
 
 import numpy as np

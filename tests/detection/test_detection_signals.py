@@ -1,3 +1,7 @@
+"""Tests for the failure-detection signals: hand-checked online values, empty observations,
+offline versus online equality and the join with the prompt frame.
+"""
+
 import math
 
 import numpy as np

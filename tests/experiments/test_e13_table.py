@@ -1,3 +1,7 @@
+"""Tests for the gated comparison table: rows, columns, seeded paired bootstrap intervals
+and which arms each model has.
+"""
+
 from pathlib import Path
 
 import pandas as pd

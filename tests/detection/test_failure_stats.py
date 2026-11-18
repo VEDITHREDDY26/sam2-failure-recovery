@@ -1,3 +1,7 @@
+"""Tests for the failure statistics script: counts on a fake result tree match hand numbers
+and incomplete runs are refused without writing output.
+"""
+
 from pathlib import Path
 
 import pandas as pd

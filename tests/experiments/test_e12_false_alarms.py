@@ -1,3 +1,7 @@
+"""Tests for the false-alarm analysis: class thresholds, strategies, accept-all matching
+the tuning table and AUC orientation.
+"""
+
 from pathlib import Path
 
 import numpy as np

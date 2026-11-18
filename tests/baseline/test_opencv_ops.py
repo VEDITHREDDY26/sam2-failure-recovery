@@ -1,3 +1,8 @@
+"""Tests for the OpenCV helpers of the baseline (RGB to BGR, box round trip, GrabCut).
+
+Checks colour order is converted explicitly and GrabCut finds an object inside a box.
+"""
+
 from pathlib import Path
 
 import cv2

@@ -1,3 +1,7 @@
+"""Tests for tuning the verification settings: the fixed 200-setting grid, the accept rule
+matching run time, best setting by gain sum and tie-breaking.
+"""
+
 import math
 from pathlib import Path
 

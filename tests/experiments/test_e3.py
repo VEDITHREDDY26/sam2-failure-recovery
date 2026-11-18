@@ -1,3 +1,7 @@
+"""Tests for the detector-rule ablation: single-frame windows on DAVIS, recall per removed
+rule, precision effects and refusal of SA-V val.
+"""
+
 import csv
 from pathlib import Path
 

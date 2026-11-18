@@ -1,3 +1,7 @@
+"""Tests for the learned detector: streaming equals batch, future frames never change the
+output at frame t, history handling, and artifact round trip with hash.
+"""
+
 from pathlib import Path
 
 import numpy as np

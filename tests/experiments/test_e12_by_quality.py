@@ -1,3 +1,7 @@
+"""Tests for the by-quality analysis: bin edges, counts, the all row matching the published
+table and a deterministic bootstrap.
+"""
+
 from pathlib import Path
 
 import pandas as pd

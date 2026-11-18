@@ -1,3 +1,5 @@
+"""Tests for the box helpers: xyxy validation, mask to box, empty masks and xywh round trips."""
+
 import numpy as np
 import pytest
 

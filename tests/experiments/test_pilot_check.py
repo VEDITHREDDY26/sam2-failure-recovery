@@ -1,3 +1,7 @@
+"""Tests for the pilot identity check: frames before the first re-prompt must be identical
+and differences at or after it are allowed.
+"""
+
 import json
 import shutil
 from pathlib import Path

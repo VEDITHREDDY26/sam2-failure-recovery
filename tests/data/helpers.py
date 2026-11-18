@@ -1,3 +1,7 @@
+"""Helpers for the data tests: build a small fake DAVIS tree, write binary PNG masks and
+make a config pointing at it.
+"""
+
 from __future__ import annotations
 
 import shutil

@@ -1,3 +1,7 @@
+"""Tests for generating the gated run configs: written only for models that get a go,
+and the CSRT arm reuses the existing ungated run.
+"""
+
 from pathlib import Path
 
 import pytest

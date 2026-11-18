@@ -1,3 +1,7 @@
+"""Tests for the prediction completeness checks: missing frames or videos, wrong shape or
+mode, extra object ids, and SA-V needing only annotated frames.
+"""
+
 from pathlib import Path
 
 import numpy as np

@@ -1,3 +1,7 @@
+"""Tests for the outcome-by-failure-type table: counts per type, invalid labels and
+missing inputs refused.
+"""
+
 from pathlib import Path
 
 import pandas as pd

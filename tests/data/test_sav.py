@@ -1,3 +1,7 @@
+"""Tests for the SA-V loader: video list, annotated frames every fourth frame, unannotated
+frames returning None, empty annotations and objects that appear late.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,7 @@
+"""Tests for the predictor wrapper helpers: arrays pass through and tensor-like objects are
+converted using fake tensors.
+"""
+
 from pathlib import Path
 
 import numpy as np

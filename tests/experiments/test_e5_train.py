@@ -1,3 +1,7 @@
+"""Tests for training the learned detector: disjoint deterministic splits, training rows,
+class weights, window maximum and capped threshold.
+"""
+
 from pathlib import Path
 
 import numpy as np

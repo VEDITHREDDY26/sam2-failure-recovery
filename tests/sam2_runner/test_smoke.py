@@ -1,3 +1,7 @@
+"""Tests for the smoke run: one PNG per frame with prompt ids, boxes passed as corners, the
+signal CSV matching the masks and overlap resolved to the smaller id on a tie.
+"""
+
 import json
 from pathlib import Path
 

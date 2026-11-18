@@ -1,3 +1,5 @@
+"""Checks by scanning imports that recovery and detection code never import the oracle code."""
+
 import ast
 from pathlib import Path
 

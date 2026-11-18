@@ -1,3 +1,7 @@
+"""Tests for the threshold sweep: a hand-checked tiny case, the frozen value added to the
+grids, output columns and figure, and refusal of bad input.
+"""
+
 from pathlib import Path
 
 import pandas as pd
